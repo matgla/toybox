@@ -155,7 +155,8 @@ for I in A B; do {
 # If no pair (because command's disabled in config), use " " for flags
 # so allflags can define the appropriate zero macros.
 
-done | $SED -n -e 's/" *"//g;/^#/d;t no;:no;s/"/"/p;t;s/\( [AB] \).*/\1 " "/p'|\
+done | grep -v '__builtin_\|__asm__' | \
+  $SED -n -e 's/" *"//g;/^#/d;t no;:no;s/"/"/p;t;s/\( [AB] \).*/\1 " "/p'|\
   sort -s | $SED -n -e 's/ A / /;t pair;h;s/\([^ ]*\).*/\1 " "/;x' \
   -e 'b single;:pair;h;n;:single;s/[^ ]* B //;H;g;s/\n/ /;p' | \
   brun mkflags > "$GENDIR"/flags.h || exit 1

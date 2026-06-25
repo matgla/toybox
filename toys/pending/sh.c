@@ -508,7 +508,7 @@ static long get_lineno(struct sh_fcall **fff)
 {
   struct sh_fcall *ff;
 
-  for (ff = TT.ff; !ff->source || !ff->name; ff = ff->next);
+  for (ff = TT.ff; (!ff->source || !ff->name) && (ff->next != ff); ff = ff->next);
   if (fff) *fff = ff;
 
   return ff->pl ? ff->pl->lineno : ff->lineno;
@@ -1419,6 +1419,7 @@ static struct sh_process *free_process(struct sh_process *pp)
   next = pp->next;
   if (!--pp->refcount) {
     llist_traverse(pp->delete, llist_free_arg);
+    if (pp->arg.v) free(pp->arg.v);
     unredirect(&pp->urd);
     free(pp);
   }
@@ -2861,6 +2862,69 @@ static void signify(int sig, char *throw)
 
 
 
+// Resolve executable path using stack buffer (no malloc).
+// Returns resolved path in 'buf' on success, NULL on failure.
+static char *resolve_path_noalloc(char *pathvar, char *name, char *buf,
+                                  int buflen)
+{
+  char *next;
+  int nlen = strlen(name), plen;
+
+  if (!pathvar) return 0;
+  for (;;) {
+    next = strchr(pathvar, ':');
+    plen = next ? next-pathvar : strlen(pathvar);
+    if (plen+1+nlen+1 <= buflen) {
+      if (plen) {
+        memcpy(buf, pathvar, plen);
+        buf[plen] = '/';
+        memcpy(buf+plen+1, name, nlen+1);
+      } else {
+        // empty PATH component means current directory
+        memcpy(buf, name, nlen+1);
+      }
+      if (!access(buf, X_OK)) return buf;
+    }
+    if (!next) break;
+    pathvar = next+1;
+  }
+  return 0;
+}
+
+// Build environ from shell vars into caller-provided stack arrays (no malloc).
+// Returns envp count. underscore_slot is set to the slot for _= var.
+static int build_environ_noalloc(char **envbuf, int envmax, int *underscore_slot)
+{
+  struct sh_fcall *ff;
+  struct sh_vars *vv;
+  unsigned ii, jj, len;
+  int envc = 0;
+
+  *underscore_slot = -1;
+
+  // Collect exported vars, skip duplicates (last definition wins since we
+  // walk the fcall stack from innermost to outermost)
+  for (ff = TT.ff; ; ff = ff->next) {
+    if (ff->vars) for (ii = ff->varslen; ii--;) {
+      vv = ff->vars+ii;
+      if (!((vv->flags&(VAR_WHITEOUT|VAR_EXPORT))==VAR_EXPORT)) continue;
+      len = 1+(varend(vv->str)-vv->str);
+      // check for duplicates already in envbuf
+      for (jj = 0; jj < (unsigned)envc; jj++)
+        if (!strncmp(envbuf[jj], vv->str, len)) break;
+      if (jj < (unsigned)envc) continue; // duplicate, skip
+      if (envc < envmax-1) {
+        if (*vv->str == '_' && vv->str[1] == '=')
+          *underscore_slot = envc;
+        envbuf[envc++] = vv->str;
+      }
+    }
+    if (ff->next == TT.ff) break;
+  }
+  envbuf[envc] = 0;
+  return envc;
+}
+
 // Call binary, or run script via xexec("sh --")
 static void sh_exec(char **argv)
 {
@@ -2871,6 +2935,68 @@ static void sh_exec(char **argv)
   struct toy_list *tl = 0;
 
   if (getpid() != TT.pid) signify(SIGINT, 0); // TODO: restore all?
+
+  // vfork child: avoid all malloc to prevent corrupting parent's heap.
+  // Use stack buffers for PATH resolution and environ building.
+  if (!CFG_TOYBOX_FORK && !toys.stacktop) {
+    char pathbuf[256];
+    char underscoreBuf[272]; // "_=" + pathbuf
+    char *envbuf[512];
+    int envc, uscore_slot;
+    char *resolved = ss;
+
+    errno = ENOENT;
+    if (strchr(ss, '/')) {
+      if (access(ss, X_OK)) resolved = 0;
+    } else {
+      resolved = resolve_path_noalloc(pp, ss, pathbuf, sizeof(pathbuf));
+    }
+
+    if (resolved) {
+      envc = build_environ_noalloc(envbuf, 512, &uscore_slot);
+
+      // Build _=<path> on stack
+      int rlen = strlen(resolved);
+      if (rlen+3 <= (int)sizeof(underscoreBuf)) {
+        underscoreBuf[0] = '_';
+        underscoreBuf[1] = '=';
+        memcpy(underscoreBuf+2, resolved, rlen+1);
+        if (uscore_slot >= 0) {
+          envbuf[uscore_slot] = underscoreBuf;
+        } else if (envc < 511) {
+          envbuf[envc++] = underscoreBuf;
+          envbuf[envc] = 0;
+        }
+      }
+
+      // Don't leave open filehandles to scripts in children
+      if (!TT.isexec) {
+        struct sh_fcall *ff;
+        for (ff = TT.ff; ff!=TT.ff->prev; ff = ff->next)
+          if (ff->source) fclose(ff->source);
+      }
+
+      execve(resolved, argv, envbuf);
+
+      // shell script without #! — use stack array
+      if (errno == ENOEXEC) {
+        unsigned argc;
+        for (argc = 0; argv[argc]; argc++);
+        if (argc+3 < 512) {
+          char *argv2_stack[512];
+          memcpy(argv2_stack+3, argv+1, argc*sizeof(char *));
+          argv2_stack[0] = "sh";
+          argv2_stack[1] = "--";
+          argv2_stack[2] = resolved;
+          execvp(argv2_stack[0], argv2_stack);
+        }
+      }
+    }
+
+    perror_msg("%s", *argv);
+    _exit(127);
+  }
+
   errno = ENOENT;
   if (strchr(ss, '/')) {
     if (access(ss, X_OK)) ss = 0;
@@ -3038,7 +3164,8 @@ if (DEBUG) { dprintf(2, "%d run command %p %s\n", getpid(), TT.ff, *pp->arg.v); 
 // TODO: when to prioritize $PATH over MAYFORK?
     if (jj&(TOYFLAG_NOFORK|TOYFLAG_MAYFORK)) {
       sigjmp_buf rebound, *prebound = toys.rebound;
-      char temp[jj = offsetof(struct toy_context, rebound)];
+      jj = offsetof(struct toy_context, rebound);
+      char temp[256];
 
       // This fakes lots of what toybox_main() does.
       memcpy(&temp, &toys, jj);
@@ -4585,11 +4712,16 @@ if (DEBUG) { dprintf(2, "%d main", getpid()); for (unsigned uu = 0; toys.argv[uu
 
     // TODO: source <(echo 'echo hello\') vs source <(echo -n 'echo hello\')
     // prints "hello" vs "hello\"
-    if (!more) run_lines();
+    if (!more) {
+      struct sh_pipeline *pl_head = TT.ff->pl;
+      run_lines();
+      if (!TT.ff) break;
+      // run_lines() advances TT.ff->pl to NULL; free from saved head
+      llist_traverse(pl_head, free_pipeline);
+      TT.ff->pl = 0;
+    }
     if (!TT.ff) break;
     more = 0;
-    llist_traverse(TT.ff->pl, free_pipeline);
-    TT.ff->pl = 0;
     llist_traverse(expect, free);
     expect = 0;
   }

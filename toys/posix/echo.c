@@ -35,7 +35,6 @@ void echo_main(void)
 {
   int i = 0;
   char *arg, *c, out[8];
-
   while ((arg = toys.optargs[i])) {
     if (i++) putchar(' ');
 

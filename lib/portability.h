@@ -55,7 +55,11 @@
 #include <sys/types.h>
 
 // Various constants old build environments (or glibc, hiding behind
-// _GNU_SOURCE) might not have even if kernel does.
+// _GNU_SOURCE) might not have even if kernel does. Pull in <fcntl.h> first so
+// the fallbacks below see the libc's real O_DIRECT/AT_* values and skip,
+// instead of defining mismatched values that the later <fcntl.h> (line ~245)
+// then redefines and warns about.
+#include <fcntl.h>
 
 #ifndef AT_FDCWD             // Kernel commit 5590ff0d5528 2006
 #define AT_FDCWD -100

@@ -207,8 +207,8 @@ void toy_singleinit(struct toy_list *which, char *argv[])
     for (toys.optc = 0; toys.optargs[toys.optc]; toys.optc++);
   }
 
-  // Setup we only want to do once: skip for multiplexer or NOFORK reentry
-  if (!(CFG_TOYBOX && which == toy_list) && !(which->flags & TOYFLAG_NOFORK)) {
+  // Setup we only want to do once: skip for multiplexer or NOFORK/MAYFORK reentry
+  if (!(CFG_TOYBOX && which == toy_list) && !(which->flags & (TOYFLAG_NOFORK|TOYFLAG_MAYFORK))) {
     char *buf = 0;
     int btype = _IOFBF;
 
@@ -224,7 +224,7 @@ void toy_singleinit(struct toy_list *which, char *argv[])
 
     if (which->flags & TOYFLAG_LINEBUF) btype = _IOLBF;
     else if (which->flags & TOYFLAG_NOBUF) btype = _IONBF;
-    else buf = xmalloc(4096);
+    buf = xmalloc(4096);
     setvbuf(stdout, buf, btype, buf ? 4096 : 0);
   }
 }

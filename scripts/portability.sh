@@ -19,7 +19,7 @@ then
   CFLAGS+=" -Wno-deprecated-declarations"
   : ${LDOPTIMIZE:=-Wl,-dead_strip} ${STRIP:=strip}
 else
-  : ${LDOPTIMIZE:=-Wl,--gc-sections -Wl,--as-needed} ${STRIP:=strip -s -R .note* -R .comment}
+  : ${LDOPTIMIZE:=-Wl,--as-needed} ${STRIP:=strip -s -R .note* -R .comment}
 fi
 
 # Disable pointless warnings only clang produces
