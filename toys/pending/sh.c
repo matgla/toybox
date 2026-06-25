@@ -407,6 +407,9 @@ GLOBALS(
   long funcslen;
   struct sh_arg alias;
 
+  // interactive command history (line editor), oldest entry first
+  struct sh_arg history;
+
   // runtime function call stack. TT.ff is current function, returns to ->next
   struct sh_fcall {
     struct sh_fcall *next, *prev;
@@ -3913,12 +3916,12 @@ static int wait_pipeline(struct sh_process *pp)
 
 // Print prompt to stderr, parsing escapes
 // Truncated to 4k at the moment, waiting for somebody to complain.
-static void do_prompt(char *prompt)
+static int do_prompt(char *prompt)
 {
   char *s, *ss, *sss, c, cc, *pp = toybuf;
   int len, ll;
 
-  if (!prompt) return;
+  if (!prompt) return 0;
   while ((len = sizeof(toybuf)-(pp-toybuf))>0 && *prompt) {
     c = *(prompt++);
 
@@ -3989,6 +3992,201 @@ static void do_prompt(char *prompt)
   len = pp-toybuf;
   if (len>=sizeof(toybuf)) len = sizeof(toybuf);
   writeall(2, toybuf, len);
+
+  return len;
+}
+
+// --- interactive line editor with command history -----------------------
+
+// Display columns spanned by the first n bytes of s. UTF-8 lead bytes count as
+// one column, continuation bytes as zero, and CSI/OSC escape sequences (e.g.
+// prompt colors) as zero. Good enough for prompts and typical command lines.
+static int tty_cols(char *s, int n)
+{
+  int i, w = 0;
+
+  for (i = 0; i<n && s[i]; i++) {
+    if (s[i]=='\e') {
+      if (s[++i]=='[' || s[i]==']')
+        while (i+1<n && s[i+1] && (s[i]<'@' || s[i]>'~')) i++;
+    } else if ((s[i]&0xc0)!=0x80) w++;
+  }
+
+  return w;
+}
+
+// Bytes in the UTF-8 character ending just before position pos.
+static int tty_prev(char *s, int pos)
+{
+  int n = 1;
+
+  while (pos-n>0 && (s[pos-n]&0xc0)==0x80) n++;
+
+  return n;
+}
+
+// Bytes in the UTF-8 character starting at position pos.
+static int tty_next(char *s, int pos, int len)
+{
+  int n = 1;
+
+  while (pos+n<len && (s[pos+n]&0xc0)==0x80) n++;
+
+  return n;
+}
+
+// Redraw the edited line: return to column 0, print prompt+buffer, erase any
+// leftover tail, then move the cursor to the edit position. pw is the prompt
+// width in display columns.
+static void tty_show(char *prompt, int pw, char *buf, int len, int pos)
+{
+  int col = pw + tty_cols(buf, pos);
+
+  dprintf(2, "\r%s%.*s\e[K\r", prompt, len, buf);
+  if (col) dprintf(2, "\e[%dC", col);
+}
+
+// Replace the edit buffer with src (NULL = empty), growing it as needed, and
+// put the cursor at the end.
+static void tty_set(char **buf, int *cap, int *len, int *pos, char *src)
+{
+  int n = src ? strlen(src) : 0;
+
+  if (n+2 > *cap) *buf = xrealloc(*buf, *cap = n+64);
+  if (n) memcpy(*buf, src, n);
+  (*buf)[n] = 0;
+  *len = *pos = n;
+}
+
+// Append a line to the history list, dropping the oldest entries past $HISTSIZE
+// (default 500). Takes ownership of line.
+static void history_add(char *line)
+{
+  char *hs = getvar("HISTSIZE");
+  long max = hs ? atol(hs) : 500;
+
+  if (max<0) max = 500;
+  arg_add(&TT.history, line);
+  while (TT.history.c > max) {
+    free(*TT.history.v);
+    memmove(TT.history.v, TT.history.v+1, sizeof(char *)*TT.history.c--);
+  }
+}
+
+// Read one logical line from an interactive terminal (fd 0) with line editing
+// and up/down history recall. prompt[0..plen) is the already-rendered prompt.
+// Returns a malloc'd line including a trailing '\n' (matching the getc() path),
+// or NULL on end of input.
+static char *read_line_tty(char *prompt, int plen)
+{
+  struct termios old;
+  char scratch[16], *buf, *saved = 0, *line;
+  int len = 0, pos = 0, cap = 64, key, hpos = TT.history.c, n, pw;
+
+  if (set_terminal(0, 1, 0, &old)) return 0;
+  prompt = xstrndup(prompt, plen);  // toybuf is volatile, keep our own copy
+  pw = tty_cols(prompt, plen);
+  buf = xmalloc(cap);
+  *buf = *scratch = 0;
+
+  // do_prompt() already wrote the prompt (and left the cursor after it), so we
+  // don't redraw it here -- doing so just double-prints it. The full redraw
+  // (tty_show: CR + reprint + \e[K + cursor move) is only needed to repaint the
+  // line in place during editing, below.
+  for (;;) {
+    key = scan_key(scratch, -1);
+
+    if (key=='\r' || key=='\n') { dprintf(2, "\r\n"); break; }
+    if (key==-1 || key==4) {            // EOF / ctrl-D
+      if (key==4 && len) { key = 256+KEY_DELETE; goto edit; }
+      dprintf(2, "\r\n");
+      free(buf);
+      buf = 0;
+      break;
+    }
+    if (key==3) {                       // ctrl-C: abandon the line
+      dprintf(2, "^C\r\n");
+      len = pos = 0;
+      *buf = 0;
+      break;
+    }
+edit:
+    if (key==256+KEY_LEFT || key==2) { if (pos) pos -= tty_prev(buf, pos); }
+    else if (key==256+KEY_RIGHT || key==6) {
+      if (pos<len) pos += tty_next(buf, pos, len);
+    } else if (key==256+KEY_HOME || key==1) pos = 0;
+    else if (key==256+KEY_END || key==5) pos = len;
+    else if (key==256+KEY_UP || key==16) {            // previous history
+      if (hpos) {
+        if (hpos==TT.history.c) saved = xstrndup(buf, len);
+        tty_set(&buf, &cap, &len, &pos, TT.history.v[--hpos]);
+      }
+    } else if (key==256+KEY_DOWN || key==14) {        // next history
+      if (hpos<TT.history.c)
+        tty_set(&buf, &cap, &len, &pos,
+          (++hpos==TT.history.c) ? saved : TT.history.v[hpos]);
+    } else if (key==127 || key==8) {                  // backspace
+      if (pos) {
+        n = tty_prev(buf, pos);
+        memmove(buf+pos-n, buf+pos, len-pos);
+        len -= n, pos -= n, buf[len] = 0;
+      }
+    } else if (key==256+KEY_DELETE) {                 // delete forward
+      if (pos<len) {
+        n = tty_next(buf, pos, len);
+        memmove(buf+pos, buf+pos+n, len-pos-n);
+        buf[len -= n] = 0;
+      }
+    } else if (key==21) { len = pos = 0, *buf = 0; }  // ctrl-U: kill line
+    else if (key==11) buf[len = pos] = 0;             // ctrl-K: kill to end
+    else if (key==23) {                               // ctrl-W: kill word
+      for (n = pos; pos && buf[pos-1]==' '; pos--);
+      while (pos && buf[pos-1]!=' ') pos--;
+      memmove(buf+pos, buf+n, len-n);
+      buf[len -= n-pos] = 0;
+    } else if (key==12) dprintf(2, "\e[H\e[2J");      // ctrl-L: clear screen
+    else if (key>=32 && key<256) {                    // insert a literal byte
+      if (len+2>cap) buf = xrealloc(buf, cap += 64);
+      memmove(buf+pos+1, buf+pos, len-pos);
+      buf[pos++] = key;
+      buf[++len] = 0;
+      // Fast path: appending at the end of the line just echoes the typed
+      // byte -- no need to redraw the whole line. A full redraw per keystroke
+      // (CR + reprint prompt+buffer + \e[K + cursor move) is O(n) bytes of TX
+      // per typed char; on a long line with no flow control that makes the UART
+      // fall behind on transmit and drop incoming RX bytes mid-line. Plain echo
+      // keeps TX balanced with RX. (Mid-line inserts shift the tail, so they
+      // fall through to the redraw below.)
+      if (pos==len) {
+        dprintf(2, "%c", key);
+        continue;
+      }
+    }
+    // Any change a single echoed byte can't express -- cursor move, backspace,
+    // delete, history recall, mid-line insert, screen clear -- redraws the line.
+    tty_show(prompt, pw, buf, len, pos);
+  }
+
+  tcsetattr(0, TCSAFLUSH, &old);
+  free(saved);
+  free(prompt);
+  if (!buf) return 0;
+
+  // record non-blank lines, skipping an exact repeat of the previous entry
+  for (n = 0; buf[n]==' '; n++);
+  if (buf[n]) {
+    line = xstrndup(buf, len);
+    if (!TT.history.c || strcmp(line, TT.history.v[TT.history.c-1]))
+      history_add(line);
+    else free(line);
+  }
+
+  // hand back the line with a trailing newline, matching the getc() contract
+  buf = xrealloc(buf, len+2);
+  buf[len++] = '\n';
+  buf[len] = 0;
+
+  return buf;
 }
 
 // returns NULL for EOF or error, else null terminated string.
@@ -4001,9 +4199,14 @@ static char *get_next_line(FILE *fp, int prompt)
   if (!fp) return 0;
   if (prompt>2 || (fp==stdin && dashi())) {
     char ps[16];
+    int plen;
 
     sprintf(ps, "PS%d", prompt);
-    do_prompt(getvar(ps));
+    plen = do_prompt(getvar(ps));
+
+    // Interactive line editing + history for the primary prompt on a terminal.
+    // (Continuation/here-doc reads fall through to the plain getc() path.)
+    if (fp==stdin && prompt==1 && isatty(0)) return read_line_tty(toybuf, plen);
   }
 
 // TODO what should ctrl-C do? (also in "select")
