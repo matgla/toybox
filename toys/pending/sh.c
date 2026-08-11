@@ -3061,7 +3061,9 @@ static void sh_exec(char **argv)
 }
 
 // Execute a single command at TT.ff->pl returning new sh_process instance.
-static struct sh_process *run_command(int local)
+// background is set when the caller ends this pipeline with "&", which decides
+// whether a builtin that could go either way has to become a real process.
+static struct sh_process *run_command(int local, int background)
 {
   char *s, *ss;
   struct sh_arg *arg = TT.ff->pl->arg, prefix = {0};
@@ -3163,9 +3165,19 @@ static struct sh_process *run_command(int local)
 if (DEBUG) { dprintf(2, "%d run command %p %s\n", getpid(), TT.ff, *pp->arg.v); debug_show_fds("run_command"); }
 // TODO: figure out when can exec instead of forking, ala sh -c blah
 
+    // A backgrounded NOFORK builtin is not run at all: it cannot be given a
+    // process of its own here, and running it would change the shell that
+    // backgrounded it ("cd /bin &", "exit &"). Doing nothing is what a
+    // fork-capable shell's parent observes.
+    if (background && (jj&TOYFLAG_NOFORK)) {
+      pp->exit = 0;
+
     // Is this command a builtin that should run in this process?
 // TODO: when to prioritize $PATH over MAYFORK?
-    if (jj&(TOYFLAG_NOFORK|TOYFLAG_MAYFORK)) {
+    // Not when it is backgrounded and has a choice: running "echo hi &" here
+    // leaves a job whose pid is 0, which nothing can wait for, and "wait" then
+    // spins on a job table it cannot empty.
+    } else if ((jj&TOYFLAG_NOFORK) || (!background && (jj&TOYFLAG_MAYFORK))) {
       sigjmp_buf rebound, *prebound = toys.rebound;
       jj = offsetof(struct toy_context, rebound);
       char temp[256];
@@ -3885,6 +3897,22 @@ static struct sh_process *wait_job(int pid, int nohang)
   return pp;
 }
 
+// Did anything in this pipeline actually become a process? A pipeline of
+// builtins that ran in this shell has already finished, so backgrounding it
+// would record a job with no pid, which no waitpid() can report and "wait"
+// loops on forever. Callers treat that as an ordinary foreground pipeline.
+static int pipeline_has_child(struct sh_process *pp)
+{
+  struct sh_process *ss = pp;
+
+  if (!pp) return 0;
+  do {
+    if (ss->pid) return 1;
+  } while ((ss = ss->next) != pp);
+
+  return 0;
+}
+
 // wait for every process in a pipeline to end
 static int wait_pipeline(struct sh_process *pp)
 {
@@ -4073,6 +4101,48 @@ static void history_add(char *line)
   }
 }
 
+// Take a run of already-buffered plain input into the line, echoing it with one
+// write. Called only when appending at the end of the line.
+//
+// A pasted line, or one sent by a test harness, arrives as a single burst; the
+// per-key path costs two syscalls per byte of it (~24us per character against
+// 3.3us of wire time on an rp2350 console at 3Mbaud). Only a run of plain
+// printable bytes is fast-pathed, taken when nothing is half-parsed in scratch,
+// so scan_key keeps its one-byte discipline for anything that could begin an
+// escape sequence. raw mode sets VMIN=1, so this read blocks exactly as the
+// scan_key call it precedes would have.
+//
+// Capped at 15 bytes because the remainder is handed back through scratch,
+// whose format holds 15; scan_key parses those on its next call.
+static void tty_take_pending(char **buf, int *cap, int *len, char *scratch)
+{
+  char in[15];
+  int n, p, rest;
+
+  // A partial sequence in scratch has to be resolved by scan_key before any raw
+  // read, or the bytes arrive out of order.
+  if (*scratch) return;
+  // EOF and errors are left for scan_key to report, so there is one place that
+  // decides what they mean.
+  if ((n = read(0, in, sizeof(in)))<1) return;
+
+  // The run the literal-insert path above would have taken a byte at a time.
+  // 127 stops it too: the editor reads DEL as backspace, not as a character.
+  for (p = 0; p<n; p++) if ((unsigned char)in[p]<32 || (unsigned char)in[p]==127) break;
+
+  if (p) {
+    if (*len+p+1>*cap) *buf = xrealloc(*buf, *cap = *len+p+64);
+    memcpy(*buf+*len, in, p);
+    (*buf)[*len += p] = 0;
+    writeall(2, in, p);
+  }
+
+  if ((rest = n-p)) {
+    *scratch = rest;
+    memcpy(scratch+1, in+p, rest);
+  }
+}
+
 // Read one logical line from an interactive terminal (fd 0) with line editing
 // and up/down history recall. prompt[0..plen) is the already-rendered prompt.
 // Returns a malloc'd line including a trailing '\n' (matching the getc() path),
@@ -4080,14 +4150,19 @@ static void history_add(char *line)
 static char *read_line_tty(char *prompt, int plen)
 {
   struct termios old;
-  char scratch[16], *buf, *saved = 0, *line;
+  // Static, and not cleared per line: tty_take_pending() reads ahead, so when a
+  // burst carries the end of one command and the start of the next, the bytes
+  // after the newline are still here when this returns. A per-call buffer would
+  // silently drop the following command.
+  static char scratch[16];
+  char *buf, *saved = 0, *line;
   int len = 0, pos = 0, cap = 64, key, hpos = TT.history.c, n, pw;
 
   if (set_terminal(0, 1, 0, &old)) return 0;
   prompt = xstrndup(prompt, plen);  // toybuf is volatile, keep our own copy
   pw = tty_cols(prompt, plen);
   buf = xmalloc(cap);
-  *buf = *scratch = 0;
+  *buf = 0;   // scratch is static and may legitimately hold carried-over input
 
   // do_prompt() already wrote the prompt (and left the cursor after it), so we
   // don't redraw it here -- doing so just double-prints it. The full redraw
@@ -4159,6 +4234,9 @@ edit:
       // fall through to the redraw below.)
       if (pos==len) {
         dprintf(2, "%c", key);
+        // Whatever else has already arrived goes in with it, in one write.
+        tty_take_pending(&buf, &cap, &len, scratch);
+        pos = len;
         continue;
       }
     }
@@ -4373,7 +4451,8 @@ if (DEBUG) dprintf(2, "%d s=%s ss=%s ctl=%s type=%d pl=%p ff=%p\n", getpid(), (T
 
     // If executable segment parse and run next command saving resulting process
     if (!TT.ff->pl->type) {
-      dlist_add_nomalloc((void *)&pplist, (void *)run_command(TT.ff->blk->pipe));
+      dlist_add_nomalloc((void *)&pplist,
+        (void *)run_command(TT.ff->blk->pipe, ctl && !strcmp(ctl, "&")));
 
     // Start of flow control block?
     } else if (TT.ff->pl->type == 1) {
@@ -4611,7 +4690,7 @@ do_then:
     // Three cases: 1) background & 2) pipeline | 3) last process in pipeline ;
     // If we ran a process and didn't pipe output, background or wait for exit
     if (pplist && TT.ff->blk->pout == -1) {
-      if (ctl && !strcmp(ctl, "&")) {
+      if (ctl && !strcmp(ctl, "&") && pipeline_has_child(pplist)) {
         if (!TT.jobs.c) TT.jobcnt = 0;
         pplist->job = ++TT.jobcnt;
         arg_add(&TT.jobs, (void *)pplist);
