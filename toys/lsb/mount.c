@@ -166,17 +166,20 @@ static void mount_filesystem(char *dev, char *dir, char *type,
     }
   }
 
+  // When blkid finds nothing -- or cannot be run from here, as on nommu yasos
+  // -- the tag goes to mount(2) as it is: the yasos kernel resolves LABEL=
+  // itself, and anywhere else the mount fails with the kernel's own error.
   if (strstart(&dev, "UUID=")) {
     char *s = chomp(xrunread((char *[]){"blkid", "-U", dev, 0}, 0));
 
-    if (!s || strlen(s)>=sizeof(toybuf)) return error_msg("No uuid %s", dev);
-    strcpy(dev = toybuf, s);
+    if (s && *s && strlen(s)<sizeof(toybuf)) strcpy(dev = toybuf, s);
+    else dev -= 5;
     free(s);
   } else if (strstart(&dev, "LABEL=")) {
     char *s = chomp(xrunread((char *[]){"blkid", "-L", dev, 0}, 0));
 
-    if (!s || strlen(s)>=sizeof(toybuf)) return error_msg("No label %s", dev);
-    strcpy(dev = toybuf, s);
+    if (s && *s && strlen(s)<sizeof(toybuf)) strcpy(dev = toybuf, s);
+    else dev -= 6;
     free(s);
   }
 
@@ -352,9 +355,13 @@ void mount_main(void)
 
       // Don't overmount the same dev on the same directory
       // (Unless root explicitly says to in non -a mode.)
+      // With -a, anything already mounted on the directory counts: an fstab
+      // LABEL= or UUID= source never string-matches the /dev path the kernel
+      // reports, and -a is meant to be safe to run twice.
       if (mtl2 && !remount)
         for (mmm = mtl2; mmm; mmm = mmm->next)
-          if (!strcmp(mm->dir, mmm->dir) && !strcmp(mm->device, mmm->device))
+          if (!strcmp(mm->dir, mmm->dir)
+              && (FLAG(a) || !strcmp(mm->device, mmm->device)))
             break;
 
       // user only counts from fstab, not opts.

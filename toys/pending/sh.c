@@ -56,12 +56,14 @@ USE_SH(NEWTOY(exit, 0, TOYFLAG_NOFORK))
 USE_SH(NEWTOY(export, "np", TOYFLAG_NOFORK))
 USE_SH(NEWTOY(jobs, "lnprs", TOYFLAG_NOFORK))
 USE_SH(NEWTOY(local, 0, TOYFLAG_NOFORK))
+USE_SH(NEWTOY(read, "u#<0d:p:r", TOYFLAG_NOFORK))
 USE_SH(NEWTOY(return, ">1", TOYFLAG_NOFORK))
 USE_SH(NEWTOY(set, 0, TOYFLAG_NOFORK))
 USE_SH(NEWTOY(shift, ">1", TOYFLAG_NOFORK))
 USE_SH(NEWTOY(source, "<1", TOYFLAG_NOFORK))
 USE_SH(OLDTOY(., source, TOYFLAG_NOFORK))
 USE_SH(NEWTOY(trap, "lp", TOYFLAG_NOFORK))
+USE_SH(NEWTOY(umask, ">1S", TOYFLAG_NOFORK))
 USE_SH(NEWTOY(unalias, "<1a", TOYFLAG_NOFORK))
 USE_SH(NEWTOY(unset, "fvn[!fv]", TOYFLAG_NOFORK))
 USE_SH(NEWTOY(wait, "n", TOYFLAG_NOFORK))
@@ -345,6 +347,33 @@ config TRAP
     The special signal EXIT gets called before the shell exits, RETURN when
     a function or source returns, and DEBUG is called before each command.
 
+config READ
+  bool
+  default n
+  depends on SH
+  help
+    usage: read [-r] [-d DELIM] [-p PROMPT] [-u FD] [NAME...]
+
+    Read a line, split it at $IFS and assign the fields to each NAME in turn
+    (the last NAME gets the rest of the line), or the whole line to $REPLY.
+    Backslash quotes the next character and joins lines. Returns 1 at EOF.
+
+    -d	Stop at DELIM instead of newline
+    -p	Show PROMPT on stderr first
+    -r	Raw: backslash is an ordinary character
+    -u	Read from file descriptor FD instead of stdin
+
+config UMASK
+  bool
+  default n
+  depends on SH
+  help
+    usage: umask [-S] [MODE]
+
+    Show or set the file creation mask, octal or symbolic (u=rwx,g=rx,o=).
+
+    -S	Show the mask symbolically
+
 config UNALIAS
   bool
   default n
@@ -380,6 +409,10 @@ GLOBALS(
     struct {
       char *a;
     } exec;
+    struct {
+      char *p, *d;
+      long u;
+    } read;
   };
 
   // keep SECONDS here: used to work around compiler limitation in run_command()
@@ -424,7 +457,7 @@ GLOBALS(
     struct sh_function *function;
     FILE *source;
     char *ifs, *name, *_;
-    struct sh_pipeline *pl;
+    struct sh_pipeline *pl, *parsed;
     struct sh_arg arg;
     struct arg_list *delete;
 
@@ -433,7 +466,7 @@ GLOBALS(
       struct sh_blockstack *next;
       struct sh_pipeline *start, *middle;
       struct sh_process *pp;       // list of processes piping in to us
-      int run, loop, *urd, pout, pipe;
+      int run, loop, *urd, pout, pipe, taken; // taken: an if branch ran
       struct sh_arg farg;          // for/select arg stack, case wildcard deck
       struct arg_list *fdelete;    // farg's cleanup list
       char *fvar;                  // for/select's iteration variable name
@@ -447,6 +480,7 @@ GLOBALS(
       int *urd, pid, exit, not, job, dash, refcount;
       long long when; // when job backgrounded/suspended
       struct sh_arg *raw, arg;
+      char *cmd;      // a job's command line: raw is gone once its script moves on
     } *pp;
   } *ff;
 
@@ -491,6 +525,8 @@ static const char *redirectors[] = {"<<<", "<<-", "<<", "<&", "<>", "<", ">>",
 #define OPT_C	0x200
 #define OPT_x	0x400
 #define OPT_u	0x800
+#define OPT_e	0x1000
+#define OPT_f	0x2000
 
 // only export $PWD and $OLDPWD on first cd
 #define OPT_cd  0x80000000
@@ -511,7 +547,9 @@ static long get_lineno(struct sh_fcall **fff)
 {
   struct sh_fcall *ff;
 
-  for (ff = TT.ff; (!ff->source || !ff->name) && (ff->next != ff); ff = ff->next);
+  // (the fcall list is circular: stop at the root if none is a named source)
+  for (ff = TT.ff; !ff->source || !ff->name; ff = ff->next)
+    if (ff->next == TT.ff) break;
   if (fff) *fff = ff;
 
   return ff->pl ? ff->pl->lineno : ff->lineno;
@@ -1314,44 +1352,89 @@ static void subshell_callback(char **argv)
 {
   struct sh_fcall *ff;
 
-  // Don't leave open filehandles to scripts in children
+  // This runs in the vfork child, on the parent's memory: it must not touch
+  // the heap. fclose() would free the parent's FILE and its buffer under it,
+  // and a malloc here is one the parent's allocator never made (yasos libc
+  // rolls a vfork child's allocator changes back, so the parent's later
+  // free() of such a block spun forever and every subshell hung). Close only
+  // this child's descriptors to the scripts, and fill in the buffers
+  // run_subshell() allocated.
   for (ff = TT.ff; ff!=TT.ff->prev; ff = ff->next)
-    if (ff->source) fclose(ff->source);
+    if (ff->source) close(fileno(ff->source));
 
   // This depends on environ having been replaced by caller
-  environ[1] = xmprintf("@%d,%d", getpid(), getppid());
-  environ[2] = xmprintf("$=%d", TT.pid);
+  sprintf(environ[1], "@%d,%d", getpid(), getppid());
+  sprintf(environ[2], "$=%d", TT.pid);
 // TODO: test $$ in (nommu)
 }
 
 // TODO what happens when you background a function?
 // turn a parsed pipeline back into a string.
+// one: 0 = to the end of the enclosing block, 1 = just this segment,
+// 2 = the block pl starts, for a subshell to run: the parent already did
+// the redirects and pipe (or &) on its closing segment, so drop those,
+// and "( )" contributes only its body.
 static char *pl2str(struct sh_pipeline *pl, int one)
 {
-  struct sh_pipeline *end = 0, *pp;
-  int len QUIET, i;
-  char *ss;
+  struct sh_pipeline *end = 0, *pp, *last = 0;
+  int len QUIET, i, j, h;
+  char *ss, *s, *ctl;
+
+  if (one==2 && !strcmp(*pl->arg->v, "(")) {
+    pl = pl->next;
+    one = 0;
+  }
 
   // Find end of block (or one argument)
-  if (one) end = pl->next;
+  if (one==1) end = pl->next;
+  else if (one==2) end = (last = pl->end)->next;
   else for (end = pl, len = 0; end; end = end->next)
     if (end->type == 1) len++;
     else if (end->type == 3 && --len<0) break;
 
   // measure, then allocate
   for (ss = 0;; ss = xmalloc(len+1)) {
-    for (pp = pl; pp != end; pp = pp->next) {
-      if (pp->type == 'F') continue; // TODO fix this
-      for (i = len = 0; i<=pp->arg->c; i++)
-        len += snprintf(ss+len, ss ? INT_MAX : 0, " %s"+!i,
-           pp->arg->v[i] ? : ";"+(pp->next==end));
+    for (len = 0, pp = pl; pp != end; pp = pp->next) {
+      // function definition: body hangs off a NOP segment in struct sh_function
+      if (pp->type == 'F') {
+        struct sh_function *funky = (void *)*pp->arg->v;
+
+        s = pl2str(funky->pipeline->next, 0);
+        len += snprintf(ss+len, ss ? INT_MAX : 0, " %s() %s"+!len, funky->name,
+          s);
+        free(s);
+        i = pp->arg->c;
+      // esac after ;; leaves a NULL in the middle of its ;; segment
+      } else for (i = 0; i<(pp==last ? 1 : pp->arg->c) && pp->arg->v[i]; i++)
+        len += snprintf(ss+len, ss ? INT_MAX : 0, " %s"+!len, pp->arg->v[i]);
+      if (pp==last) break;
+
+      // ; and newline both end a segment with a NULL control operator, which
+      // can't become ; after a block opener or case pattern (then, do, "(")
+      if (!(ctl = pp->arg->v[pp->arg->c]) && pp->next != end && !pp->count
+          && pp->type != 1 && pp->type != 2
+          && (!pp->next->arg->c || **pp->next->arg->v != ';'))
+        ctl = ";";
+      if (ctl) len += snprintf(ss+len, ss ? INT_MAX : 0, " %s", ctl);
+
+      // HERE document bodies go on the lines after their redirects, each
+      // closed by its [{n}]<<[-] word minus the quoting the parser ignores
+      for (h = i = 0; h<pp->count; h++) {
+        len += snprintf(ss+len, ss ? INT_MAX : 0, "\n");
+        for (j = 0; j<pp->arg[h+1].c; j++)
+          len += snprintf(ss+len, ss ? INT_MAX : 0, "%s", pp->arg[h+1].v[j]);
+        while (i<pp->arg->c-1) {
+          s = skip_redir_prefix(pp->arg->v[i++]);
+          if (!strncmp(s, "<<", 2) && s[2]!='<') break;
+        }
+        for (s = pp->arg->v[i]; *s; s++)
+          if (!strchr("\\\"'", *s)) len += snprintf(ss+len, ss?INT_MAX:0, "%c", *s);
+      }
+      if (pp->count) len += snprintf(ss+len, ss ? INT_MAX : 0, "\n");
     }
     if (ss) return ss;
   }
 
-// TODO test output with case and function
-// TODO add HERE documents back in
-// TODO handle functions
 }
 
 static struct sh_blockstack *clear_block(struct sh_blockstack *blk)
@@ -1421,6 +1504,7 @@ static struct sh_process *free_process(struct sh_process *pp)
   if (!pp) return 0;
   next = pp->next;
   if (!--pp->refcount) {
+    free(pp->cmd);
     llist_traverse(pp->delete, llist_free_arg);
     if (pp->arg.v) free(pp->arg.v);
     unredirect(&pp->urd);
@@ -1451,6 +1535,7 @@ static void end_fcall(void)
   ff->delete = 0;
   while (pop_block());
   free(ff->blk);
+  llist_traverse(ff->parsed, free_pipeline);
   free_function(ff->function);
   free_process(ff->pp);
 
@@ -1492,20 +1577,25 @@ if (DEBUG) { dprintf(2, "%d run_subshell %.*s\n", getpid(), len, str); debug_sho
   } else {
     int pipes[2];
     unsigned i;
-    char **oldenv = environ, *ss = str ? : pl2str(TT.ff->pl->next, 0);
+    long j, lines = 0;
+    char **oldenv = environ, *ss = str ? : pl2str(TT.ff->pl, 2), *fn, *sss;
     struct sh_vars **vv;
+    struct sh_arg funcs = {0};
+    struct sh_fcall *ff;
 
     // open pipe to child
     if (pipe(pipes) || 254 != dup2(pipes[0], 254)) return 1;
     close(pipes[0]);
     fcntl(pipes[1], F_SETFD, FD_CLOEXEC);
 
-    // vfork child with clean environment
+    // vfork child with clean environment; subshell_callback() fills in
+    // environ[1] and [2] without allocating (see there)
     environ = xzalloc(4*sizeof(char *));
     *environ = getvar("PATH") ? : "PATH=";
+    environ[1] = xmalloc(32);
+    environ[2] = xmalloc(32);
     pid = xpopen_setup(0, 0, subshell_callback);
 // TODO what if pid -1? Handle process exhaustion.
-    // free entries added to end of environment by callback (shared heap)
     free(environ[1]);
     free(environ[2]);
     free(environ);
@@ -1513,17 +1603,53 @@ if (DEBUG) { dprintf(2, "%d run_subshell %.*s\n", getpid(), len, str); debug_sho
 
     // marshall context to child
     close(254);
+    // Functions go ahead of the command as definitions for the child to parse,
+    // so start $LINENO back by the lines they take (and the child counts the
+    // command's own first line as it reads it).
+    for (i = 0; i<TT.funcslen; i++) {
+      fn = pl2str(TT.functions[i]->pipeline->next, 0);
+      for (sss = fn, j = 1; *sss; sss++) j += *sss=='\n';
+      arg_add(&funcs, fn);
+      lines += j;
+    }
+    // Aliases too, as alias commands ahead of the functions: a piped builtin
+    // runs in this child now, and `alias | grep` printed nothing without them.
+    for (i = 0; i<TT.alias.c; i++)
+      for (lines++, sss = TT.alias.v[i]; *sss; sss++) lines += *sss=='\n';
     // TODO: need ff->name and ff->source's lineno
     dprintf(pipes[1], "%lld %u %ld %u %u\n", TT.SECONDS,
-      TT.options, get_lineno(0), TT.pid, TT.bangpid);
+      TT.options, get_lineno(0)-lines-1, TT.pid, TT.bangpid);
+
+    // Positional parameters, $0 first: count, then length and bytes of each
+    ff = FIND_FF(arg);
+    dprintf(pipes[1], "%ld\n%u\n%s", ff->arg.c-ff->shift+1,
+      (unsigned)strlen(TT.argv0), TT.argv0);
+    for (j = ff->shift; j<ff->arg.c; j++)
+      dprintf(pipes[1], "%u\n%s", (unsigned)strlen(ff->arg.v[j]),
+        ff->arg.v[j]);
 
     for (i = 0, vv = visible_vars(); vv[i]; i++)
       dprintf(pipes[1], "%u %lu\n%.*s", (unsigned)strlen(vv[i]->str),
               vv[i]->flags, (int)strlen(vv[i]->str), vv[i]->str);
     free(vv);
 
-    // send command
-    dprintf(pipes[1], "0 0\n%.*s\n", len, ss);
+    // send functions and command
+    dprintf(pipes[1], "0 0\n");
+    for (i = 0; i<TT.alias.c; i++) {
+      dprintf(pipes[1], "alias '");
+      for (sss = TT.alias.v[i]; *sss; sss += j) {
+        j = strcspn(sss, "'");
+        dprintf(pipes[1], "%.*s", (int)j, sss);
+        if (sss[j]=='\'') dprintf(pipes[1], "'\\''"), j++;
+      }
+      dprintf(pipes[1], "'\n");
+    }
+    for (i = 0; i<funcs.c; i++) {
+      dprintf(pipes[1], "%s() %s\n", TT.functions[i]->name, funcs.v[i]);
+      free(funcs.v[i]);
+    }
+    free(funcs.v);
+    dprintf(pipes[1], "%.*s\n", len, ss);
     if (!str) free(ss);
     close(pipes[1]);
   }
@@ -1531,10 +1657,12 @@ if (DEBUG) { dprintf(2, "%d run_subshell %.*s\n", getpid(), len, str); debug_sho
   return pid;
 }
 
-// Call subshell with either stdin/stdout redirected, return other end of pipe
-static int pipe_subshell(char *s, int len, int out)
+// Call subshell with either stdin/stdout redirected, return other end of pipe.
+// The subshell's pid goes to *pid (when not NULL) for the caller to reap.
+static int pipe_subshell(char *s, int len, int out, pid_t *pid)
 {
   int pipes[2], *uu = 0, in = !out;
+  pid_t sub;
 
   // Grab subshell data
   if (pipe(pipes)) {
@@ -1547,7 +1675,8 @@ static int pipe_subshell(char *s, int len, int out)
   save_redirect(&uu, pipes[in], in);
   close(pipes[in]);
   fcntl(pipes[!in], F_SETFD, FD_CLOEXEC);
-  run_subshell(s, len);
+  sub = run_subshell(s, len);
+  if (pid) *pid = sub;
   fcntl(pipes[!in], F_SETFD, 0);
   unredirect(&uu);
 
@@ -1575,7 +1704,7 @@ static char *getvar_special(char *str, int len, int *used, struct arg_list **del
   else if (cc == '#' || isdigit(cc)) {
     struct sh_fcall *ff = FIND_FF(arg);
 
-    if (cc=='#') s = xmprintf("%d", ff->arg.c);
+    if (cc=='#') s = xmprintf("%ld", ff->arg.c-ff->shift);
     else if (cc=='0') return TT.argv0;
     else {
       for (*used = uu = 0; *used<len && isdigit(str[*used]); ++*used)
@@ -1598,7 +1727,7 @@ static int wildcard_matchlen(char *str, int len, char *pattern, int plen,
 {
   struct sh_arg ant = {0};    // stack: of str offsets
   long ss, pp, dd, best = -1;
-  int i, j, c, not;
+  int i, j, k, c, not, hit;
 
   // Loop through wildcards in pattern.
   for (ss = pp = dd = 0; ;) {
@@ -1637,17 +1766,19 @@ static int wildcard_matchlen(char *str, int len, char *pattern, int plen,
 
         continue;
       } else if (c == '[') {
+        // next char of str in the set (or not in it, after [! or [^)
         pp += (not = !!strchr("!^", pattern[pp]));
-        ss += getutf8(str+ss, len-ss, &c);
-        for (i = 0; pp<(long)deck->v[dd]; i = 0) {
+        ss += (k = getutf8(str+ss, len-ss, &c));
+        if (flags&WILD_CASE) c = towupper(c);
+        for (hit = 0; pp<(long)deck->v[dd];) {
           pp += getutf8(pattern+pp, plen-pp, &i);
-          if (pattern[pp]=='-') {
-            ++pp;
-            pp += getutf8(pattern+pp, plen-pp, &j);
-            if (not^(i<=c && j>=c)) break;
-          } else if (not^(i==c)) break;
+          j = i;
+          if (pattern[pp]=='-' && pp+1<(long)deck->v[dd])
+            pp += 1+getutf8(pattern+pp+1, plen-pp-1, &j);
+          if (flags&WILD_CASE) i = towupper(i), j = towupper(j);
+          hit |= i<=c && c<=j;
         }
-        if (i) {
+        if (k && hit!=not) {
           pp = 1+(long)deck->v[dd++];
 
           continue;
@@ -1798,7 +1929,8 @@ static void collect_wildcards(char *new, long oo, struct sh_arg *deck)
   if (!deck->c) arg_add(deck, 0);
   vv = (long *)deck->v;
 
-  // vv[0] used for paren level (bottom 16 bits) + bracket start offset<<16
+  // vv[0] used for paren level (bottom 16 bits) + 1+bracket start offset<<16
+  // (so a [ at the start of the pattern still counts as seen)
 
   // at end loop backwards through live wildcards to remove pending unmatched (
   if (!cc) {
@@ -1832,7 +1964,7 @@ static void collect_wildcards(char *new, long oo, struct sh_arg *deck)
   else if (cc == ')' && (65535&*vv)) --*vv;
 
   // complete [range], discard wildcards within, add [, fall through to add ]
-  else if (cc == ']' && (bracket = *vv>>16)) {
+  else if (cc == ']' && (bracket = (*vv>>16)-1)>=0) {
 
     // don't end range yet for [] or [^]
     if (bracket+1 == oo || (bracket+2 == oo && strchr("!^", new[oo-1]))) return;
@@ -1843,7 +1975,7 @@ static void collect_wildcards(char *new, long oo, struct sh_arg *deck)
   // Not a wildcard
   } else {
     // [ is speculative, don't add to deck yet, just record we saw it
-    if (cc == '[' && !(*vv>>16)) *vv = (oo<<16)+(65535&*vv);
+    if (cc == '[' && !(*vv>>16)) *vv = ((oo+1)<<16)+(65535&*vv);
     return;
   }
 
@@ -1858,15 +1990,16 @@ static void wildcard_add_files(struct sh_arg *arg, char *pattern,
 {
   struct dirtree *dt;
   char *pp;
-  int ll = 0;
+  int ll = 0, first = arg->c;
 
   // fast path: when no wildcards, add pattern verbatim
   collect_wildcards("", 0, deck);
   if (!deck->c) return arg_add(arg, pattern);
 
-  // Traverse starting with leading patternless path.
+  // Traverse starting with leading patternless path ("/" for /name*).
   pp = wildcard_path(TT.wcpat = pattern, 0, TT.wcdeck = deck, &ll, 0);
-  pp = (pp==pattern) ? 0 : xstrndup(pattern, pp-pattern);
+  if (pp==pattern) pp = (*pattern=='/') ? xstrdup("/") : 0;
+  else pp = xstrndup(pattern, pp-pattern);
   dt = dirtree_flagread(pp, DIRTREE_STATLESS|DIRTREE_SYMFOLLOW,
     do_wildcard_files);
   free(pp);
@@ -1883,6 +2016,8 @@ static void wildcard_add_files(struct sh_arg *arg, char *pattern,
       free(pp);
     } while (dt && !dt->child);
   }
+  // matches come out in directory order, but expand sorted
+  qsort(arg->v+first, arg->c-first, sizeof(char *), qstrcmp);
 // TODO: test .*/../
 }
 
@@ -1915,6 +2050,66 @@ static char *slashcopy(char *s, char *c, struct sh_arg *deck)
 #define NO_TILDE (1<<4)    // ~username/path
 #define NO_NULL  (1<<5)    // Expand to "" instead of NULL
 #define NO_IFS   (1<<6)    // Use ' ' instead of $IFS to combine $*
+
+static char *expand_one_arg(char *new, unsigned flags);
+
+// Find the } closing a ${ whose contents start at s, skipping quotes,
+// escapes, and nested ${} (parse_word() guarantees there is one).
+static char *dollar_brace_end(char *s)
+{
+  int depth = 0, qq = 0;
+
+  for (; *s; s++) {
+    if (*s=='\\' && s[1]) s++;
+    else if (qq) qq *= *s!=qq;
+    else if (*s=='"' || *s=='\'') qq = *s;
+    else if (*s=='{') depth++;
+    else if (*s=='}' && !depth--) break;
+  }
+
+  return s;
+}
+
+// Expand the word of ${x-word} ${x=word} ${x?word} ${x+word}, from s to the
+// closing }. Inside double quotes, ~ stays literal.
+static char *brace_word(char *s, int quoted, struct arg_list **delete)
+{
+  char *word = xstrndup(s, dollar_brace_end(s)-s), *out;
+
+  if (!(out = expand_one_arg(word, NO_NULL|NO_TILDE*quoted))) out = xstrdup("");
+  if (out != word) free(word);
+
+  return push_arg(delete, out);
+}
+
+static int expand_arg_nobrace(struct sh_arg *arg, char *str, unsigned flags,
+  struct arg_list **delete, struct sh_arg *ant, long *measure);
+
+// Unquoted ${x-word} and ${x+word} become the fields word itself expands to:
+// ${1+"$@"} is "$@" (each argument, even empty ones) or nothing at all. The
+// result is an expansion, so blanks written in word split it too, except
+// inside quotes or a nested expansion.
+static void brace_fields(char *s, struct sh_arg *aa, struct arg_list **delete)
+{
+  char *end = dollar_brace_end(s), *ss;
+  int qq = 0, depth = 0;
+
+  memset(aa, 0, sizeof(*aa));
+  for (; s<end; s = ss+1) {
+    for (ss = s; ss<end; ss++) {
+      if (*ss=='\\' && ss+1<end) ss++;
+      else if (qq) qq *= *ss!=qq;
+      else if (strchr("\"'`", *ss)) qq = *ss;
+      else if (strchr("{(", *ss)) depth++;
+      else if (strchr("})", *ss)) depth--;
+      else if (!depth && isspace(*ss) && strchr(TT.ff->ifs, *ss)) break;
+    }
+    if (ss>s) expand_arg_nobrace(aa, push_arg(delete, xstrndup(s, ss-s)),
+      NO_PATH, delete, 0, 0);
+  }
+  if (aa->v) push_arg(delete, aa->v);
+}
+
 // expand str appending to arg using above flag defines, add mallocs to delete
 // if ant not null, save wildcard deck there instead of expanding vs filesystem
 // returns 0 for success, 1 for error.
@@ -1924,7 +2119,12 @@ static int expand_arg_nobrace(struct sh_arg *arg, char *str, unsigned flags,
 {
   char cc, qq = flags&NO_QUOTE, sep[6], *new = str, *s, *ss = ss, *ifs, *slice;
   int ii = 0, oo = 0, xx, yy, dd, jj, kk, ll, mm;
+  pid_t sub;
   struct sh_arg deck = {0};
+
+
+  // set -f: no pathname expansion (patterns for case and [[ ]] still match)
+  if ((TT.options&OPT_f) && !ant) flags |= NO_PATH;
 
   // TODO: ! history expansion
 
@@ -1957,7 +2157,7 @@ static int expand_arg_nobrace(struct sh_arg *arg, char *str, unsigned flags,
   if (!ant) ant = &deck;
   for (; (cc = str[ii++]); str!=new && (new[oo] = 0)) {
     struct sh_arg aa = {0};
-    int nosplit = 0;
+    int nosplit = 0, fields = 0;
 
     if (measure && cc==*measure) break;
 
@@ -2036,10 +2236,15 @@ static int expand_arg_nobrace(struct sh_arg *arg, char *str, unsigned flags,
 
 // TODO what does \ in `` mean? What is echo `printf %s \$x` supposed to do?
         // This has to be async so pipe buffer doesn't fill up
-        if (!ss) jj = pipe_subshell(s, kk, 0); // TODO $(true &&) syntax_err()
+        sub = 0;
+        if (!ss) jj = pipe_subshell(s, kk, 0, &sub); // TODO $(true &&) syntax_err()
         if ((ifs = readfd(jj, 0, &pp)))
           for (kk = strlen(ifs); kk && ifs[kk-1]=='\n'; ifs[--kk] = 0);
         close(jj);
+        // Reap it: nothing else waits for a $() child, so each one stayed a
+        // zombie for as long as this shell lived (on YasOS an exit record in
+        // the kernel heap, which a long script ran out of).
+        if (sub>0) while (waitpid(sub, 0, 0)<0 && errno==EINTR);
       }
     } else if (!str[ii]) new[oo++] = cc;
     else if (cc=='\\') {
@@ -2061,9 +2266,9 @@ static int expand_arg_nobrace(struct sh_arg *arg, char *str, unsigned flags,
 
         continue;
       } else if (cc == '{') {
-        // Skip escapes to find }, parse_word() guarantees ${} terminates
-        for (cc = *++ss; str[ii] != '}'; ii++) if (str[ii]=='\\') ii++;
-        ii++;
+        // find the matching }
+        cc = *++ss;
+        ii = dollar_brace_end(str+ii)-str+1;
 
         if (cc == '}') ifs = (void *)1;
         else if (strchr("#!", cc)) ss++;
@@ -2138,7 +2343,11 @@ barf:
 
       // Resolve unprefixed variables
       if (strchr("{$", ss[-1])) {
-        if (strchr("@*", cc)) aa = FIND_FF(arg)->arg;
+        if (strchr("@*", cc)) {
+          struct sh_fcall *ff = FIND_FF(arg);
+
+          aa = (struct sh_arg){ff->arg.v+ff->shift, ff->arg.c-ff->shift};
+        }
         else {
           ifs = getvar_special(ss, jj, &jj, delete);
           if (!ifs && (TT.options&OPT_u)) goto barf;
@@ -2175,20 +2384,27 @@ barf:
       // get next argument
       if (aa.c) ifs = aa.v[mm++] ? : "";
 
-      // Are we performing surgery on this argument?
-      if (slice && *slice != '}') {
+      // Are we performing surgery on this argument? (fields already did it)
+      if (slice && *slice != '}' && !fields) {
         dd = slice[xx = (*slice == ':')];
         if (!ifs || (xx && !*ifs)) {
-          if (strchr("-?=", dd)) { // - use default = assign default ? error
-            push_arg(delete, ifs = slashcopy(slice+xx+1, "}", 0));
+          if (dd == '-' && !(qq&1)) {
+            brace_fields(slice+xx+1, &aa, delete);
+            fields++;
+            ifs = aa.c ? aa.v[mm++] : 0;
+          } else if (strchr("-?=", dd)) { // - use default = assign default ? error
+            ifs = brace_word(slice+xx+1, qq&1, delete);
             if (dd == '?' || (dd == '=' &&
               !(setvar(s = xmprintf("%.*s=%s", (int)(slice-ss), ss, ifs)))))
                 goto barf; // TODO ? exits past "source" boundary
           }
-        } else if (dd == '-'); // NOP when ifs not empty
+        } else if (strchr("-=?", dd)); // NOP when ifs not empty
         // use alternate value
-        else if (dd == '+')
-          push_arg(delete, ifs = slashcopy(slice+xx+1, "}", 0));
+        else if (dd == '+' && !(qq&1)) {
+          brace_fields(slice+xx+1, &aa, delete);
+          fields++;
+          ifs = aa.c ? aa.v[mm++] : 0;
+        } else if (dd == '+') ifs = brace_word(slice+xx+1, qq&1, delete);
         else if (xx) { // ${x::}
           long long la = 0, lb = LLONG_MAX, lc = 1;
 
@@ -2333,19 +2549,19 @@ barf:
 
       // Nothing left to do?
       if (!ifs) break;
-      if (!*ifs && !qq) continue;
+      if (!*ifs && !qq && !fields) continue;
 
       // loop within current ifs checking region to split words
       do {
 
         // find end of (split) word
-        if ((qq&1) || nosplit) ss = ifs+strlen(ifs);
+        if ((qq&1) || nosplit || fields) ss = ifs+strlen(ifs);
         else for (ss = ifs; *ss; ss += kk)
           if (utf8chr(ss, TT.ff->ifs, &kk)) break;
 
         // when no prefix, not splitting, no suffix: use existing memory
         if (!oo && !*ss && !((mm==aa.c) ? str[ii] : nosplit)) {
-          if (qq || ss!=ifs) {
+          if (qq || fields || ss!=ifs) {
             if (!(flags&NO_PATH))
               for (jj = 0; ifs[jj]; jj++) collect_wildcards(ifs, jj, ant);
             wildcard_add_files(arg, ifs, &deck, delete);
@@ -2364,8 +2580,15 @@ barf:
         if (jj) break;
 
         // If splitting, keep quoted, non-blank, or non-whitespace separator
+        // (a run of just IFS whitespace, as at the start, is no empty field)
         if (!nosplit) {
-          if (qq || *new || *ss) {
+          int keep = qq || fields || *new;
+          char *run;
+
+          for (run = ss; !keep && *run; run += kk)
+            if (!(jj = utf8chr(run, TT.ff->ifs, &kk))) break;
+            else keep = !iswspace(jj);
+          if (keep) {
             push_arg(delete, new = xrealloc(new, strlen(new)+1));
             wildcard_add_files(arg, new, &deck, delete);
             new = xstrdup(str+ii);
@@ -2391,8 +2614,9 @@ barf:
 
 // TODO test NO_SPLIT cares about IFS, see also trailing \n
 
-  // Record result.
-  if (*new || qq) {
+  // Record result. ("$@" with no positional parameters is no word at all.)
+  if (*new || (qq && !(FIND_FF(arg)->arg.c == FIND_FF(arg)->shift
+      && (!strcmp(str, "\"$@\"") || !strcmp(str, "\"${@}\""))))) {
     if (str != new) push_arg(delete, new);
     wildcard_add_files(arg, new, &deck, delete);
     new = 0;
@@ -2607,19 +2831,25 @@ static char *expand_one_arg(char *new, unsigned flags)
   struct arg_list *del = 0, *dd;
   struct sh_arg arg = {0};
   char *s = 0;
+  int owned = 0;
 
   // TODO: ${var:?error} here?
   if (!expand_arg(&arg, new, flags|NO_PATH|NO_SPLIT, &del))
-    if (!(s = *arg.v) && (flags&(NO_IFS|NO_NULL))) s = "";
+    if (!(s = arg.c ? *arg.v : 0) && (flags&(NO_IFS|NO_NULL))) s = "";
 
   // Free non-returned allocations.
   while (del) {
     dd = del->next;
     if (del->arg != s) free(del->arg);
+    else owned++;
     free(del);
     del = dd;
   }
   free(arg.v);
+
+  // Callers free any result that isn't new, so don't hand back a variable's
+  // own storage (unquoted "$x" expands to it) or the "" literal.
+  if (s && s != new && !owned) s = xstrdup(s);
 
   return s;
 }
@@ -2645,7 +2875,7 @@ static int expand_redir(struct sh_process *pp, struct sh_arg *arg, int skip)
 
     // Handle <() >() redirectionss
     if ((*s == '<' || *s == '>') && s[1] == '(') {
-      int new = pipe_subshell(s+2, strlen(s+2)-1, *s == '>');
+      int new = pipe_subshell(s+2, strlen(s+2)-1, *s == '>', 0);
 
       // Grab subshell data
       if (new == -1) goto qfail;
@@ -2872,6 +3102,7 @@ static char *resolve_path_noalloc(char *pathvar, char *name, char *buf,
 {
   char *next;
   int nlen = strlen(name), plen;
+  struct stat st;
 
   if (!pathvar) return 0;
   for (;;) {
@@ -2886,7 +3117,9 @@ static char *resolve_path_noalloc(char *pathvar, char *name, char *buf,
         // empty PATH component means current directory
         memcpy(buf, name, nlen+1);
       }
-      if (!access(buf, X_OK)) return buf;
+      // X_OK is search permission on a directory, which no command is
+      if (!access(buf, X_OK) && !stat(buf, &st) && !S_ISDIR(st.st_mode))
+        return buf;
     }
     if (!next) break;
     pathvar = next+1;
@@ -2972,11 +3205,12 @@ static void sh_exec(char **argv)
         }
       }
 
-      // Don't leave open filehandles to scripts in children
+      // Don't leave open filehandles to scripts in children. Close only the
+      // descriptor: fclose() would free the FILE in memory the parent shares.
       if (!TT.isexec) {
         struct sh_fcall *ff;
         for (ff = TT.ff; ff!=TT.ff->prev; ff = ff->next)
-          if (ff->source) fclose(ff->source);
+          if (ff->source) close(fileno(ff->source));
       }
 
       execve(resolved, argv, envbuf);
@@ -3067,8 +3301,9 @@ static struct sh_process *run_command(int local, int background)
 {
   char *s, *ss;
   struct sh_arg *arg = TT.ff->pl->arg, prefix = {0};
-  int skiplen = 0, funk, ii, jj;
+  int skiplen = 0, funk, ii, jj, piped = local;
   struct sh_process *pp = xzalloc(sizeof(*pp));
+  struct toy_list *tl0;
 
   // Setup function and child process contexts
   // Create new function context after resolving variables (for shift)
@@ -3149,6 +3384,21 @@ static struct sh_process *run_command(int local, int background)
       sherror_msg("bad math: %.*s @ %ld", ii-2, s+2, (long)(ss-s)-2);
     else toys.exitval = !ll;
     pp->exit = toys.exitval;
+  // A pipeline segment runs beside the others: the next one reads what it
+  // writes, and nothing drains a pipe until its reader runs. A function or a
+  // shell builtin would run to completion right here first, and block for
+  // good on a full pipe (config.status's "eval sed ... | awk" once the pipe is
+  // smaller than the file), so it gets a subshell like any program would.
+  } else if (piped && (funk != TT.funcslen ||
+      ((tl0 = toy_find(*pp->arg.v)) && (tl0->flags&TOYFLAG_NOFORK)))) {
+    // (the segment is the caller's: this command pushed an fcall of its own)
+    char *seg = pl2str(TT.ff->next->pl, 1), *end = seg+strlen(seg);
+
+    // the | (or &) joining it to the next segment is the parent's business
+    while (end>seg && strchr(" |&", end[-1])) end--;
+    *end = 0;
+    if (1>(pp->pid = run_subshell(seg, -1))) pp->exit = 127;
+    free(seg);
   // call shell function
   } else if (funk != TT.funcslen) {
     (TT.ff->function = TT.functions[funk])->refcount++;
@@ -3177,7 +3427,9 @@ if (DEBUG) { dprintf(2, "%d run command %p %s\n", getpid(), TT.ff, *pp->arg.v); 
     // Not when it is backgrounded and has a choice: running "echo hi &" here
     // leaves a job whose pid is 0, which nothing can wait for, and "wait" then
     // spins on a job table it cannot empty.
-    } else if ((jj&TOYFLAG_NOFORK) || (!background && (jj&TOYFLAG_MAYFORK))) {
+    // (and not when piped: in-process it could fill the pipe before its
+    // reader starts, see above)
+    } else if ((jj&TOYFLAG_NOFORK) || (!background && !piped && (jj&TOYFLAG_MAYFORK))) {
       sigjmp_buf rebound, *prebound = toys.rebound;
       jj = offsetof(struct toy_context, rebound);
       char temp[256];
@@ -3201,7 +3453,8 @@ if (DEBUG) { dprintf(2, "%d builtin", getpid()); for (int xx = 0; xx<=pp->arg.c;
       pp->exit = toys.exitval;
       clearerr(stdout);
       if (toys.optargs != toys.argv+1) push_arg(&pp->delete, toys.optargs);
-      if (toys.old_umask) umask(toys.old_umask);
+      // only a TOYFLAG_UMASK command changed it behind the user's back
+      if ((tl->flags&TOYFLAG_UMASK) && toys.old_umask) umask(toys.old_umask);
       memcpy(&toys, &temp, jj);
     // Run command in new child process
     } else if (-1==(pp->pid = xpopen_setup(pp->arg.v, 0, sh_exec)))
@@ -3209,8 +3462,15 @@ if (DEBUG) { dprintf(2, "%d builtin", getpid()); for (int xx = 0; xx<=pp->arg.c;
   }
 
 done:
-  // pop the new function context if nothing left for it to do
-  if (!TT.ff->source && !TT.ff->pl) end_fcall();
+  // pop the new function context if nothing left for it to do, putting back
+  // the filehandles its redirects displaced: waiting for the process to be
+  // reaped would leave the next segment of a pipeline inheriting them (and
+  // "echo >/dev/null | cat" never sees EOF). A function, source, or eval
+  // body still to run keeps them.
+  if (!TT.ff->source && !TT.ff->pl) {
+    unredirect(&pp->urd);
+    end_fcall();
+  }
 
   return pp;
 }
@@ -3324,8 +3584,13 @@ if (DEBUG) dprintf(2, "%d parse_line %s\n", getpid(), line ? : "(NULL)");
           arg->v[arg->c] = end;
         }
 
-        // Detect EOF, free appended marker if found
-        for (s = line; *end; s++, end++) {
+        // Detect EOF, free appended marker if found. After <<- the EOF line
+        // can be indented with tabs too.
+        for (j = 1; j<pl->arg->c && pl->arg->v[j]!=end; j++);
+        s = line;
+        if (j<pl->arg->c && skip_redir_prefix(pl->arg->v[j-1])[2]=='-')
+          while (*s=='\t') s++;
+        for (; *end; s++, end++) {
           end += strspn(end, ex);
           if (!*s || *s != *end) break;
         }
@@ -3410,6 +3675,10 @@ if (DEBUG) dprintf(2, "%d %p(%d) %s word=%.*s\n", getpid(), pl, pl ? pl->type : 
 
     // Do we need to request another line to finish word (find ending quote)?
     if (!end) {
+      if (!line) {
+        s = "unterminated quote at EOF";
+        goto flush;
+      }
       // Save unparsed bit of this line, we'll need to re-parse it.
       if (*start=='\\' && (!start[1] || start[1]=='\n')) start++;
       arg_add(arg, memmove(line, start, strlen(start)+1));
@@ -3421,8 +3690,10 @@ if (DEBUG) dprintf(2, "%d %p(%d) %s word=%.*s\n", getpid(), pl, pl ? pl->type : 
     // Ok, we have a word. What does it _mean_?
 
     // case/esac parsing is weird (unbalanced parentheses!), handle first
+    // (a function declaration in a case arm, "a) f() {", is not a pattern)
     i = ex && !strcmp(ex, "esac") &&
-        ((pl->type && pl->type != 3) || (*start==';' && end-start>1));
+        ((pl->type && pl->type != 3 && pl->type != 'f')
+         || (*start==';' && end-start>1));
     if (i) {
       // Premature EOL in type 1 (case x\nin) or 2 (at start or after ;;) is ok
       if (end == start) {
@@ -3548,7 +3819,8 @@ if (DEBUG) dprintf(2, "%d %p(%d) %s word=%.*s\n", getpid(), pl, pl ? pl->type : 
         if (*s==';') {
           if (arg->c>1 || (arg->c==1 && pl->prev->type==1)) goto flush;
         } else pl->type = 2;
-        i = arg->c - (**arg->v==';' && arg->v[0][1]);
+        j = **arg->v==';' && arg->v[0][1];
+        i = arg->c - j;
         if (i==1 && !strcmp(s, "esac")) {
           // esac right after "in" or ";;" ends block, fall through
           if (arg->c>1) {
@@ -3557,7 +3829,8 @@ if (DEBUG) dprintf(2, "%d %p(%d) %s word=%.*s\n", getpid(), pl, pl ? pl->type : 
             arg_add(arg, s);
           } else pl->type = 0;
         } else {
-          if (arg->c>1) i -= *arg->v[1]=='(';
+          // the pattern list may open with "(", after "in" as well as ";;"
+          if (arg->c>j) i -= *arg->v[j]=='(';
           if (i>0 && ((i&1)==!!strchr("|)", *s) || strchr(";(", *s)))
             goto flush;
           if (*s=='&' || !strcmp(s, "||")) goto flush;
@@ -3597,15 +3870,16 @@ if (DEBUG) dprintf(2, "%d %p(%d) %s word=%.*s\n", getpid(), pl, pl ? pl->type : 
     } else if (strchr(";|&", *s) && strncmp(s, "&>", 2)) {
       arg->c--;
 
-      // Connecting nonexistent statements is an error
-      if (!arg->c || !smemcmp(ex, "do\0A", 4)) goto flush;
+      // Connecting nonexistent statements is an error, except "for i; do"
+      if (!smemcmp(ex, "do\0A", 4)) goto flush;
+      if (!arg->c && (strcmp(s, ";") || smemcmp(ex, "do\0C", 4)
+          || !strncmp(pl->prev->arg->v[1], "((", 2))) goto flush;
 
       // treat ; as newline so we don't have to check both elsewhere.
       if (!strcmp(s, ";")) {
         arg->v[arg->c] = 0;
         free(s);
         s = 0;
-// TODO can't have ; between "for i" and in or do. (Newline yes, ; no. Why?)
         if (!arg->c && !smemcmp(ex, "do\0C", 4)) continue;
 
       // ;; and friends only allowed in case statements
@@ -3821,7 +4095,7 @@ static int find_job(char *s)
 {
   char *ss;
   long ll = strtol(s, &ss, 10);
-  int i, j;
+  int i;
 
   if (!TT.jobs.c) return -1;
   if (!*s || (!s[1] && strchr("%+-", *s))) {
@@ -3835,32 +4109,58 @@ static int find_job(char *s)
     for (i = 0; i<TT.jobs.c; i++)
       if (((struct sh_process *)TT.jobs.v[i])->job == ll) return i;
 
-  // Match start of command or %?abc
+  // Match start of command or %?abc (a block job has no words of its own)
   for (i = 0; i<TT.jobs.c; i++) {
     struct sh_process *pp = (void *)TT.jobs.v[i];
 
-    if (strstart(&s, *pp->arg.v)) return i;
-    if (*s != '?' || !s[1]) continue;
-    for (j = 0; j<pp->arg.c; j++) if (strstr(pp->arg.v[j], s+1)) return i;
+    if (!pp->cmd) continue;
+    if (*s == '?' && s[1]) {
+      if (strstr(pp->cmd, s+1)) return i;
+    } else if (!strncmp(pp->cmd, s, strlen(s))) return i;
   }
 
   return -1;
 }
 
 // We pass in dash to avoid looping over every job each time
+// The command line of a job: its processes' words joined by " | " (a block
+// such as "( ... )" has none of its own to show).
+static char *job_text(struct sh_process *pp)
+{
+  struct sh_process *ss = pp;
+  char *buf = 0;
+  int i, j, len = 0, len2 = 0;
+
+  for (i = 0; i<2; i++) {
+    ss = pp;
+    len = 0;
+    do {
+      if (ss != pp) len += snprintf(buf ? buf+len : 0, len2 ? len2-len : 0,
+        " | ");
+      if (!ss->raw) len += snprintf(buf ? buf+len : 0, len2 ? len2-len : 0,
+        "(...)");
+      else for (j = 0; j<ss->raw->c; j++)
+        len += snprintf(buf ? buf+len : 0, len2 ? len2-len : 0, " %s"+!j,
+          ss->raw->v[j]);
+    } while ((ss = ss->next) != pp);
+    if (!i) buf = xmalloc(len2 = len+1);
+  }
+
+  return buf;
+}
+
 static char *show_job(struct sh_process *pp, char dash)
 {
   char *s = "Run", *buf = 0;
-  int i, j, len, len2;
+  int i, len, len2;
 
 // TODO Terminated (Exited)
   if (pp->exit<0) s = "Stop";
   else if (pp->exit>126) s = "Kill";
   else if (pp->exit>0) s = "Done";
   for (i = len = len2 = 0;; i++) {
-    len += snprintf(buf, len2, "[%d]%c  %-6s", pp->job, dash, s);
-    for (j = 0; j<pp->raw->c; j++)
-      len += snprintf(buf, len2, " %s"+!j, pp->raw->v[j]);
+    len += snprintf(buf, len2, "[%d]%c  %-6s %s", pp->job, dash, s,
+      pp->cmd ? : "");
     if (!i) buf = xmalloc(len2 = len+1);
     else break;
   }
@@ -3872,26 +4172,33 @@ static char *show_job(struct sh_process *pp, char dash)
 static struct sh_process *wait_job(int pid, int nohang)
 {
   struct sh_process *pp QUIET;
-  int ii, status, minus, plus;
+  int ii, status, minus, plus, got;
 
   if (TT.jobs.c<1) return 0;
   for (;;) {
     errno = 0;
-    if (1>(pid = waitpid(pid, &status, nohang ? WNOHANG : 0))) {
+    // (into its own variable: overwriting pid made the next pass wait for the
+    // process just reaped instead of the one asked for)
+    if (1>(got = waitpid(pid, &status, nohang ? WNOHANG : 0))) {
       if (!nohang && errno==EINTR && !toys.signal) continue;
       return 0;
     }
+    // a job is keyed by its last process, as $! and its exit status are
+    // (the earlier ones of a pipeline are reaped here without a word)
     for (ii = 0; ii<TT.jobs.c; ii++) {
       pp = (void *)TT.jobs.v[ii];
-      if (pp->pid == pid) break;
+      if (pp->prev->pid == got) break;
     }
     if (ii == TT.jobs.c) continue;
-    if (pid<1) return 0;
     if (!WIFSTOPPED(status) && !WIFCONTINUED(status)) break;
   }
   plus = find_plus_minus(&minus);
-  memmove(TT.jobs.v+ii, TT.jobs.v+ii+1, (TT.jobs.c--)-ii);
+  // (pointers, not bytes, and the NULL arg_add() keeps after the last one:
+  // moving (c-ii) bytes shredded the entries above, so with three jobs "wait"
+  // chased pids no child had and never ended)
+  memmove(TT.jobs.v+ii, TT.jobs.v+ii+1, (TT.jobs.c-- -ii)*sizeof(*TT.jobs.v));
   pp->exit = WIFEXITED(status) ? WEXITSTATUS(status) : WTERMSIG(status)+128;
+  pp->prev->exit = pp->exit;
   pp->dash = is_plus_minus(ii, plus, minus);
 
   return pp;
@@ -4342,6 +4649,8 @@ if (DEBUG) dprintf(2, "%d get_next_line=%s\n", getpid(), new ? : "(null)");
 // run a parsed shell function. Handle flow control blocks and characters,
 // setup pipes and block redirection, break/continue, call builtins, functions,
 // vfork/exec external commands. Return when out of input.
+static void run_exit_trap(void);
+
 static void run_lines(void)
 {
   char *ctl, *s, *ss, **vv;
@@ -4370,6 +4679,8 @@ static void run_lines(void)
     if (!TT.ff->pl) {
       if (TT.ff->source) break;
       i = TT.ff->signal;
+      // leaving the last fcall ends the shell: EXIT trap first
+      if (TT.ff == TT.ff->prev) run_exit_trap();
       end_fcall();
 // TODO can we move advance logic to start of loop to avoid straddle?
       if (!TT.ff || !TT.ff->pl) break;
@@ -4589,7 +4900,7 @@ if (DEBUG) dprintf(2, "%d s=%s ss=%s ctl=%s type=%d pl=%p ff=%p\n", getpid(), (T
               &TT.ff->blk->fdelete, &arg2, 0))) break;
             s = arg.c ? *arg.v : "";
             match = wildcard_match(TT.ff->blk->fvar, s, &arg2, 0);
-            if (match>=0 && !s[match]) break;
+            if (match>=0 && !TT.ff->blk->fvar[match]) break;
             else if (**vv++ == ')') {
               vv = 0;
               if ((TT.ff->pl = TT.ff->pl->end)->type!=2) break;
@@ -4605,9 +4916,11 @@ if (DEBUG) dprintf(2, "%d s=%s ss=%s ctl=%s type=%d pl=%p ff=%p\n", getpid(), (T
       } else if (!strcmp(s, "then")) {
 do_then:
         TT.ff->blk->run = TT.ff->blk->run && !toys.exitval;
+        TT.ff->blk->taken |= TT.ff->blk->run;
         toys.exitval = 0;
+      // once one branch ran, skip every later elif test and the else
       } else if (!strcmp(s, "else") || !strcmp(s, "elif"))
-        TT.ff->blk->run = !TT.ff->blk->run;
+        TT.ff->blk->run = !TT.ff->blk->taken;
 
       // Loop
       else if (!strcmp(s, "do")) {
@@ -4693,8 +5006,10 @@ do_then:
       if (ctl && !strcmp(ctl, "&") && pipeline_has_child(pplist)) {
         if (!TT.jobs.c) TT.jobcnt = 0;
         pplist->job = ++TT.jobcnt;
+        pplist->cmd = job_text(pplist);
         arg_add(&TT.jobs, (void *)pplist);
-        if (dashi()) dprintf(2, "[%u] %u\n", pplist->job,pplist->pid);
+        TT.bangpid = pplist->prev->pid;
+        if (dashi()) dprintf(2, "[%u] %u\n", pplist->job, TT.bangpid);
       } else toys.exitval = wait_pipeline(pplist);
       pplist = 0;
     }
@@ -4705,7 +5020,11 @@ advance:
       for (;;) {
         ctl = TT.ff->pl->arg->v[TT.ff->pl->arg->c];
         if (!ctl || strcmp(ctl, toys.exitval ? "&&" : "||")) break;
-        if ((TT.ff->pl = TT.ff->pl->next)->type) TT.ff->pl = TT.ff->pl->end;
+        // skip the whole next pipeline, not just its first segment
+        do {
+          if ((TT.ff->pl = TT.ff->pl->next)->type) TT.ff->pl = TT.ff->pl->end;
+          ctl = TT.ff->pl->arg->v[TT.ff->pl->arg->c];
+        } while (ctl && *ctl=='|' && ctl[1]!='|');
       }
     }
     TT.ff->pl = TT.ff->pl->next;
@@ -4812,6 +5131,20 @@ static void nommu_reentry(void)
   // Marshall magics: $SECONDS $- $LINENO $$ $!
   if (5!=fscanf(TT.ff->source, "%lld %u %ld %u %u%*[^\n]", &TT.SECONDS,
       &TT.options, &TT.ff->lineno, &TT.pid, &TT.bangpid)) error_exit(0);
+
+  // Positional parameters: count, then length\n bytes each, $0 first
+  if (1!=fscanf(TT.ff->source, "%lu%*[^\n]", &ll) || !ll) error_exit(0);
+  TT.ff->arg.v = xzalloc((ll+1)*sizeof(char *));
+  for (TT.ff->arg.c = 0; TT.ff->arg.c<ll; TT.ff->arg.c++) {
+    if (1!=fscanf(TT.ff->source, "%u%*[^\n]", &len)) error_exit(0);
+    fgetc(TT.ff->source);
+    (s = xmalloc(len+1))[len] = 0;
+    if (len && 1!=fread(s, len, 1, TT.ff->source)) error_exit(0);
+    TT.ff->arg.v[TT.ff->arg.c] = s;
+  }
+  TT.argv0 = *TT.ff->arg.v++;
+  TT.ff->arg.c--;
+  TT.ff->shift = 0;
 
   // Read named variables: type, len, var=value\0
   for (;;) {
@@ -4930,13 +5263,70 @@ static void subshell_setup(void)
   addvar("_=", TT.ff)->flags = VAR_NOFREE;
 }
 
-void sh_main(void)
+// Read input and execute lines, with or without prompts, until the fcall
+// stack is empty or back down to stop.
+static void sh_loop(struct sh_fcall *stop)
 {
 // TODO should expect also move into TT.ff like pl did
   struct double_list *expect = 0;
   char *new;
   unsigned more = 0;
 
+  for (;;) {
+    // if this fcall has source but not dlist_terminate()d pl, get line & parse
+    if (TT.ff->source && (!TT.ff->pl || TT.ff->pl->prev)) {
+      more = parse_line(new = get_next_line(TT.ff->source, more+1), &expect);
+      if (more==1) {
+        if (new) continue;
+        syntax_err("unexpected end of file");
+      }
+      // at EOF or error, close source and signal run_lines to pop fcall
+      if (!new && TT.ff->source) {
+        fclose(TT.ff->source);
+        TT.ff->source = 0;
+      }
+    }
+
+    // TODO: source <(echo 'echo hello\') vs source <(echo -n 'echo hello\')
+    // prints "hello" vs "hello\"
+    if (!more) {
+      // run_lines() walks TT.ff->pl off the end of the list it runs, and
+      // returns early to read input for an fcall it pushed (eval, source,
+      // trap) while that list is still mid-execution. So the fcall keeps its
+      // list until it has run the next one, or ends.
+      if (TT.ff->pl) {
+        llist_traverse(TT.ff->parsed, free_pipeline);
+        TT.ff->parsed = TT.ff->pl;
+      }
+      run_lines();
+    }
+    if (!TT.ff || TT.ff == stop) break;
+    more = 0;
+    llist_traverse(TT.ff->pl, free_pipeline);
+    TT.ff->pl = 0;
+    llist_traverse(expect, free);
+    expect = 0;
+  }
+}
+
+// Run the EXIT trap (once) before the shell goes away. Its exit status is
+// not the shell's, unless it calls exit itself.
+static void run_exit_trap(void)
+{
+  struct sh_fcall *ff = TT.ff;
+  char *s = TT.traps[0];
+  int status = toys.exitval;
+
+  if (!s || !ff) return;
+  TT.traps[0] = 0;
+  add_fcall()->source = fmemopen(s, strlen(s), "r");
+  push_arg(&TT.ff->delete, s);
+  sh_loop(ff);
+  toys.exitval = status;
+}
+
+void sh_main(void)
+{
 if (DEBUG) { dprintf(2, "%d main", getpid()); for (unsigned uu = 0; toys.argv[uu]; uu++) dprintf(2, " %s", toys.argv[uu]); dprintf(2, "\n"); }
 
   signify(SIGPIPE, 0);
@@ -4958,7 +5348,7 @@ if (DEBUG) { dprintf(2, "%d main", getpid()); for (unsigned uu = 0; toys.argv[uu
   // Create initial function context
   add_fcall()->arg = (struct sh_arg){.v = toys.optargs, .c = toys.optc};
   TT.argv0 = toys.argv[0];
-  if (toys.optc>1) {
+  if (toys.optc && !(TT.options&FLAG_s)) {
     TT.argv0 = *toys.optargs;
     TT.ff->arg.v++;
     TT.ff->arg.c--;
@@ -4977,36 +5367,7 @@ if (DEBUG) { dprintf(2, "%d main", getpid()); for (unsigned uu = 0; toys.argv[uu
 
   // Main execution loop: read input and execute lines, with or without prompts.
   if (CFG_TOYBOX_FORK) setjmp(TT.forkchild);
-  for (;;) {
-    // if this fcall has source but not dlist_terminate()d pl, get line & parse
-    if (TT.ff->source && (!TT.ff->pl || TT.ff->pl->prev)) {
-      more = parse_line(new = get_next_line(TT.ff->source, more+1), &expect);
-      if (more==1) {
-        if (new) continue;
-        syntax_err("unexpected end of file");
-      }
-      // at EOF or error, close source and signal run_lines to pop fcall
-      if (!new && TT.ff->source) {
-        fclose(TT.ff->source);
-        TT.ff->source = 0;
-      }
-    }
-
-    // TODO: source <(echo 'echo hello\') vs source <(echo -n 'echo hello\')
-    // prints "hello" vs "hello\"
-    if (!more) {
-      struct sh_pipeline *pl_head = TT.ff->pl;
-      run_lines();
-      if (!TT.ff) break;
-      // run_lines() advances TT.ff->pl to NULL; free from saved head
-      llist_traverse(pl_head, free_pipeline);
-      TT.ff->pl = 0;
-    }
-    if (!TT.ff) break;
-    more = 0;
-    llist_traverse(expect, free);
-    expect = 0;
-  }
+  sh_loop(0);
 
   // exit signal.
 }
@@ -5133,17 +5494,25 @@ void continue_main(void)
 
 void exit_main(void)
 {
+  struct sh_fcall *ff;
+
   toys.exitval = *toys.optargs ? atoi(*toys.optargs) : 0;
+  // nothing else runs after exit: drop what's pending before the EXIT trap
+  if (TT.traps[0] && TT.ff) {
+    ff = TT.ff;
+    do ff->pl = 0; while ((ff = ff->next) != TT.ff);
+    run_exit_trap();
+  }
   toys.rebound = 0;
-  // TODO trap EXIT, sigatexit
   xexit();
 }
 
 // lib/args.c can't +prefix & "+o history" needs space so parse cmdline here
 void set_main(void)
 {
-  char *cc, *ostr[] = {"braceexpand", "noclobber", "xtrace"};
-  int ii, jj, kk, oo = 0, dd = 0;
+  char *cc, *ostr[] = {"braceexpand", "noclobber", "xtrace", "nounset",
+    "errexit", "noglob"};
+  int ii, jj, kk, oo = 0, dd = 0, dashdash = 0;
 
   // display visible variables
   if (!*toys.optargs) {
@@ -5173,9 +5542,15 @@ void set_main(void)
       printf("%s\t%s\n", ostr[jj], TT.options&(OPT_B<<jj) ? "on" : "off");
     oo = 0;
     if (!cc || !dd) break;
+    // "--" ends options, and sets the positional parameters even to none
+    if (!strcmp(cc, "--")) {
+      dashdash++;
+      ii++;
+      break;
+    }
     for (jj = 1; cc[jj]; jj++) {
       if (cc[jj] == 'o') oo++;
-      else if (-1 != (kk = stridx("BCxu", cc[jj]))) {
+      else if (-1 != (kk = stridx("BCxuef", cc[jj]))) {
         if (*cc == '-') TT.options |= OPT_B<<kk;
         else TT.options &= ~(OPT_B<<kk);
       } else error_exit("bad -%c", toys.optargs[ii][1]);
@@ -5183,7 +5558,7 @@ void set_main(void)
   }
 
   // handle positional parameters
-  if (cc) {
+  if (cc || dashdash) {
     struct arg_list *al, **head;
     struct sh_fcall *ff;
     struct sh_arg *arg;
@@ -5204,7 +5579,6 @@ void set_main(void)
       if (al->arg == (void *)arg->v) break;
 
     // free last set's memory (if any) so it doesn't accumulate in loop
-    cc = *arg->v;
     if (al) for (jj = arg->c; jj; jj--) {
       *head = al->next;
       free(al->arg);
@@ -5212,12 +5586,14 @@ void set_main(void)
       al = *head;
     }
 
-    // Add copies of each new argument, scheduling them for deletion.
+    // Add copies of each new argument, scheduling them for deletion. The
+    // first slot is $0 (for ${*:0}), shifted past so $1 is the first new one.
     *arg = (struct sh_arg){0, 0};
-    arg_add(arg, cc);
+    arg_add(arg, TT.argv0);
     while (toys.optargs[ii])
       arg_add(arg, push_arg(&ff->pp->delete, xstrdup(toys.optargs[ii++])));
     push_arg(&ff->pp->delete, arg->v);
+    ff->shift = 1;
   }
 }
 
@@ -5234,7 +5610,7 @@ void trap_main(void)
   if (FLAG(l)) return list_signals();
   else if (FLAG(p) || !toys.optc) {
     for (ii = 0; ii<NSIG+2; ii++) if (TT.traps[ii]) {
-      if (!(sig = num_to_sig(ii))) for (jj = 0; jj<ARRAY_LEN(sn); jj++)
+      if (!(sig = ii ? num_to_sig(ii) : 0)) for (jj = 0; jj<ARRAY_LEN(sn); jj++)
         if (ii==sn[jj].num) sig = sn[jj].name;
       if (sig) printf("trap -- '%s' %s\n", TT.traps[ii], sig); // TODO $'' esc
     }
@@ -5244,7 +5620,9 @@ void trap_main(void)
   // Assign new handler to each listed signal
   if (toys.optc==1 || !**toys.optargs || !strcmp(*toys.optargs, "-")) sig = 0;
   for (ii = toys.optc>1; toys.optargs[ii]; ii++) {
-    if (1>(jj = sig_to_num(toys.optargs[ii]))) {
+    // signal 0 is EXIT, and the handler table stops at NSIG
+    if ((jj = sig_to_num(toys.optargs[ii]))>=NSIG) jj = -1;
+    if (1>jj && jj) {
       while (++jj<ARRAY_LEN(sn))
         if (!strcasecmp(toys.optargs[ii], sn[jj].name)) break;
       if (jj==ARRAY_LEN(sn)) {
@@ -5257,6 +5635,75 @@ void trap_main(void)
 }
 
 // TODO need test: unset clears var first and stops, function only if no var.
+#define FOR_read
+#include "generated/flags.h"
+
+void read_main(void)
+{
+  char *buf = 0, *quoted = 0, *ifs = TT.ff->ifs, **name = toys.optargs, c;
+  int delim = FLAG(d) ? *TT.read.d : '\n', len = 0, ii, jj, kk;
+
+  if (FLAG(p)) dprintf(2, "%s", TT.read.p);
+
+  // One byte at a time: whatever comes after the line belongs to the next
+  // reader of this pipe. Backslash quotes a byte (so IFS can't split at it)
+  // and backslash newline continues the line.
+  for (toys.exitval = 1;;) {
+    if (1 != read(TT.read.u, &c, 1)) break;
+    ii = 0;
+    if (c == '\\' && !FLAG(r)) {
+      if (1 != read(TT.read.u, &c, 1)) break;
+      if (c == '\n') continue;
+      ii++;
+    } else if (c == delim) {
+      toys.exitval = 0;
+      break;
+    }
+    if (!(len&63)) {
+      buf = xrealloc(buf, len+65);
+      quoted = xrealloc(quoted, len+65);
+    }
+    quoted[len] = ii;
+    buf[len++] = c;
+  }
+  if (!buf) {
+    buf = xzalloc(1);
+    quoted = xzalloc(1);
+  }
+  buf[len] = 0;
+
+  // No NAME: all of it into $REPLY
+  if (!*name) {
+    setvarval("REPLY", buf);
+    free(buf);
+    free(quoted);
+
+    return;
+  }
+
+  // Split at IFS: whitespace runs, or one other IFS byte with whitespace
+  // around it. The last NAME keeps the rest minus trailing IFS whitespace.
+#define IFS_AT(i) (!quoted[i] && strchr(ifs, buf[i]))
+#define IFS_WS(i) (IFS_AT(i) && isspace(buf[i]))
+  for (ii = 0; ii<len && IFS_WS(ii); ii++);
+  for (; *name; name++) {
+    for (jj = ii; jj<len && (!name[1] || !IFS_AT(jj)); jj++);
+    if (!name[1]) while (jj>ii && IFS_WS(jj-1)) jj--;
+    c = buf[jj];
+    buf[jj] = 0;
+    setvarval(*name, buf+ii);
+    buf[jj] = c;
+    for (kk = jj; kk<len && IFS_WS(kk); kk++);
+    if (kk<len && IFS_AT(kk) && !isspace(buf[kk]))
+      for (kk++; kk<len && IFS_WS(kk); kk++);
+    ii = kk;
+  }
+#undef IFS_AT
+#undef IFS_WS
+  free(buf);
+  free(quoted);
+}
+
 #define FOR_unset
 #include "generated/flags.h"
 
@@ -5280,7 +5727,9 @@ void unset_main(void)
       if (!strcmp(*arg, TT.functions[ii]->name)) break;
     if (ii != TT.funcslen) {
       free_function(TT.functions[ii]);
-      memmove(TT.functions+ii, TT.functions+ii+1, TT.funcslen+1-ii);
+      // pointers (and the terminator), and one function fewer
+      memmove(TT.functions+ii, TT.functions+ii+1,
+        sizeof(*TT.functions)*(TT.funcslen-- -ii));
     }
   }
 }
@@ -5425,7 +5874,7 @@ void jobs_main(void)
       }
     } else if ((j = i) >= TT.jobs.c) break;
 
-    s = show_job((void *)TT.jobs.v[i], is_plus_minus(i, plus, minus));
+    s = show_job((void *)TT.jobs.v[j], is_plus_minus(j, plus, minus));
     printf("%s\n", s);
     free(s);
   }
@@ -5513,8 +5962,6 @@ void shift_main(void)
 // TODO add tests: sh -c "source input four five" one two three
 void source_main(void)
 {
-  int ii;
-
   if (!(TT.ff->source = fpathopen(*toys.optargs)))
     return perror_msg_raw(*toys.optargs);
 
@@ -5523,8 +5970,7 @@ void source_main(void)
   TT.ff->name = *toys.optargs;
   TT.ff->arg.v = toys.optargs;
   TT.ff->shift = 1; // $0 is shell name, not source file name
-  for (ii = 0; toys.argv[ii]; ii++);
-  TT.ff->arg.c = ii;
+  TT.ff->arg.c = toys.optc;
 }
 
 #define FOR_unalias
@@ -5552,9 +5998,36 @@ void unalias_main(void)
     else {
       free(TT.alias.v[j]);
       memmove(TT.alias.v+j, TT.alias.v+j+1,
-        sizeof(*TT.alias.v)*TT.alias.c--+1-j);
+        sizeof(*TT.alias.v)*(TT.alias.c-- -j));
     }
   }
+}
+
+#define FOR_umask
+#include "generated/flags.h"
+
+void umask_main(void)
+{
+  mode_t old = umask(0), mode;
+  char *s = *toys.optargs, *end;
+  int ii;
+
+  umask(old);
+  if (!s) {
+    if (!FLAG(S)) printf("%04o\n", (int)old);
+    else for (ii = 0; ii<3; ii++) {
+      mode = ~old>>(3*(2-ii));
+      printf("%c=%s%s%s%c", "ugo"[ii], (mode&4) ? "r" : "", (mode&2) ? "w" : "",
+        (mode&1) ? "x" : "", ii<2 ? ',' : '\n');
+    }
+
+    return;
+  }
+  if (isdigit(*s)) {
+    mode = strtoul(s, &end, 8);
+    if (*end || mode>0777) return error_msg("bad mode %s", s);
+  } else mode = ~string_to_mode(s, ~old&0777)&0777;
+  umask(mode);
 }
 
 #define FOR_wait
@@ -5581,11 +6054,12 @@ void wait_main(void)
     ll = estrtol(toys.optargs[ii], &s, 10);
     if (errno || *s) {
       // TODO %job can be a pipeline, add tests
-      if (-1 == (jj = find_job(toys.optargs[ii]))) {
+      s = toys.optargs[ii];
+      if (-1 == (jj = find_job(s+('%' == *s)))) {
         error_msg("%s: bad pid/job", toys.optargs[ii]);
         continue;
       }
-      ll = ((struct sh_process *)TT.jobs.v[jj])->pid;
+      ll = ((struct sh_process *)TT.jobs.v[jj])->prev->pid;
     }
     if (!(pp = wait_job(ll, 0))) {
       if (toys.signal) toys.exitval = 128+toys.signal;

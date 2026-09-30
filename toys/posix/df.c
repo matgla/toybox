@@ -16,7 +16,7 @@ config DF
     each filesystem listed on the command line, or all currently mounted
     filesystems.
 
-    -a	Show all (including /proc and friends)
+    -a	Show all (including overmounted filesystems)
     -H	Human readable (k=1000)
     -h	Human readable (K=1024)
     -i	Show inodes instead of blocks
@@ -81,8 +81,9 @@ static void show_mt(struct mtab_list *mt, int measuring)
   char *dsuapm[6]; // device, size, used, avail, percent, mount
   int i;
 
-  // If we don't have -a, skip overmounted and synthetic filesystems.
-  if (!mt || (!FLAG(a) && (!mt->stat.st_dev || !mt->statvfs.f_blocks))) return;
+  // If we don't have -a, skip overmounted filesystems. One with no size
+  // (ramfs, proc) is still mounted, so it gets a line of dashes.
+  if (!mt || (!FLAG(a) && !mt->stat.st_dev)) return;
 
   // If we have -t, skip other filesystem types
   if (TT.t) {
@@ -96,7 +97,8 @@ static void show_mt(struct mtab_list *mt, int measuring)
   // Prepare filesystem display fields
   *dsuapm = *mt->device == '/' ? xabspath(mt->device, 0) : 0;
   if (!*dsuapm) *dsuapm = mt->device;
-  if (!mt->stat.st_dev) for (i = 1; i<5; i++) dsuapm[i] = "-";
+  if (!mt->stat.st_dev || !mt->statvfs.f_blocks)
+    for (i = 1; i<5; i++) dsuapm[i] = "-";
   else {
     if (FLAG(i)) {
       suap[0] = mt->statvfs.f_files;
@@ -137,7 +139,7 @@ static void show_mt(struct mtab_list *mt, int measuring)
 
 void df_main(void)
 {
-  struct mtab_list *mt, *mtstart, *mtend, *mt2, *mt3;
+  struct mtab_list *mt, *mtstart, *mtend, *mt2;
   int measuring;
   char **next;
 
@@ -159,12 +161,26 @@ void df_main(void)
         if (stat(*next, &st)) {
           if (!measuring) perror_msg("'%s'", *next);
         } else {
+          char *path = xabspath(*next, 0);
+          int len, best = -1;
+
           // Find and display this filesystem.  Use _last_ hit in case of
-          // overmounts (which is first hit in the reversed list).
+          // overmounts (which is first hit in the reversed list). A bind
+          // shares its source's st_dev, so among the hits prefer the mount
+          // whose directory holds the path.
           for (mt = mtend, mt2 = 0; mt; mt = mt->prev) {
-            if (!mt2 && st.st_dev == mt->stat.st_dev) mt2 = mt;
+            if (st.st_dev == mt->stat.st_dev) {
+              len = strlen(mt->dir);
+              if (!mt2) mt2 = mt;
+              if (path && len > best && !strncmp(path, mt->dir, len)
+                  && (len == 1 || !path[len] || path[len] == '/')) {
+                mt2 = mt;
+                best = len;
+              }
+            }
             if (st.st_rdev && (st.st_rdev == mt->stat.st_dev)) break;
           }
+          free(path);
           show_mt(mt ? : mt2, measuring);
         }
       }
@@ -172,18 +188,13 @@ void df_main(void)
       print_header();
     }
   } else {
-    // Loop through mount list to filter out overmounts.
-    for (mt = mtend; mt; mt = mt->prev) {
-      for (mt3 = mt, mt2 = mt->prev; mt2; mt2 = mt2->prev) {
-        if (mt->stat.st_dev == mt2->stat.st_dev) {
-          // For --bind mounts, show earliest mount
-          if (!strcmp(mt->device, mt2->device)) {
-            mt3->stat.st_dev = 0;
-            mt3 = mt2;
-          } else mt2->stat.st_dev = 0;
-        }
-      }
-    }
+    // Loop through mount list to filter out overmounts: an earlier mount on
+    // the same directory. A bind shares its source's st_dev but sits on its
+    // own directory, so it keeps its own line.
+    for (mt = mtend; mt; mt = mt->prev)
+      for (mt2 = mt->prev; mt2; mt2 = mt2->prev)
+        if (mt->stat.st_dev == mt2->stat.st_dev && !strcmp(mt->dir, mt2->dir))
+          mt2->stat.st_dev = 0;
 
     // Measure the names then output the table (in filesystem creation order).
     for (measuring = 1;;) {
