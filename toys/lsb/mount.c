@@ -169,6 +169,9 @@ static void mount_filesystem(char *dev, char *dir, char *type,
   // When blkid finds nothing -- or cannot be run from here, as on nommu yasos
   // -- the tag goes to mount(2) as it is: the yasos kernel resolves LABEL=
   // itself, and anywhere else the mount fails with the kernel's own error.
+  // On yasos LABEL= goes straight there: running blkid costs a pipe whose
+  // 4 KiB buffer sits on the kernel heap until mount exits, one per entry of
+  // a mount -a, and that alone ran an 80 KiB rp2350 heap out.
   if (strstart(&dev, "UUID=")) {
     char *s = chomp(xrunread((char *[]){"blkid", "-U", dev, 0}, 0));
 
@@ -176,11 +179,15 @@ static void mount_filesystem(char *dev, char *dir, char *type,
     else dev -= 5;
     free(s);
   } else if (strstart(&dev, "LABEL=")) {
+#ifdef __YasOS__
+    dev -= 6;
+#else
     char *s = chomp(xrunread((char *[]){"blkid", "-L", dev, 0}, 0));
 
     if (s && *s && strlen(s)<sizeof(toybuf)) strcpy(dev = toybuf, s);
     else dev -= 6;
     free(s);
+#endif
   }
 
   // Autodetect bind mount or filesystem type
