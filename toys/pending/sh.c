@@ -4450,6 +4450,10 @@ static void tty_take_pending(char **buf, int *cap, int *len, char *scratch)
   }
 }
 
+// Set when ctrl-C abandoned the line being edited, so sh_loop() can drop a
+// half-parsed command (an open if/for/quote waiting at PS2) along with it.
+static int line_cancelled;
+
 // Read one logical line from an interactive terminal (fd 0) with line editing
 // and up/down history recall. prompt[0..plen) is the already-rendered prompt.
 // Returns a malloc'd line including a trailing '\n' (matching the getc() path),
@@ -4490,6 +4494,7 @@ static char *read_line_tty(char *prompt, int plen)
       dprintf(2, "^C\r\n");
       len = pos = 0;
       *buf = 0;
+      line_cancelled = 1;
       break;
     }
 edit:
@@ -4527,7 +4532,9 @@ edit:
       memmove(buf+pos, buf+n, len-n);
       buf[len -= n-pos] = 0;
     } else if (key==12) dprintf(2, "\e[H\e[2J");      // ctrl-L: clear screen
-    else if (key>=32 && key<256) {                    // insert a literal byte
+    // TAB too: there is no completion, and a here-document typed at PS2 (a
+    // Makefile) needs its tabs.
+    else if ((key>=32 && key<256) || key==9) {        // insert a literal byte
       if (len+2>cap) buf = xrealloc(buf, cap += 64);
       memmove(buf+pos+1, buf+pos, len-pos);
       buf[pos++] = key;
@@ -4589,9 +4596,12 @@ static char *get_next_line(FILE *fp, int prompt)
     sprintf(ps, "PS%d", prompt);
     plen = do_prompt(getvar(ps));
 
-    // Interactive line editing + history for the primary prompt on a terminal.
-    // (Continuation/here-doc reads fall through to the plain getc() path.)
-    if (fp==stdin && prompt==1 && isatty(0)) return read_line_tty(toybuf, plen);
+    // Interactive line editing + history on a terminal, for continuation
+    // lines too: read_line_tty() reads ahead into its own buffer, so a burst
+    // that opens a block on one line and continues it on the next must be
+    // read back through it, and its ctrl-C is the only way out of a PS2
+    // prompt (the console has no ISIG to turn ^C into SIGINT).
+    if (fp==stdin && prompt<3 && isatty(0)) return read_line_tty(toybuf, plen);
   }
 
 // TODO what should ctrl-C do? (also in "select")
@@ -5275,7 +5285,24 @@ static void sh_loop(struct sh_fcall *stop)
   for (;;) {
     // if this fcall has source but not dlist_terminate()d pl, get line & parse
     if (TT.ff->source && (!TT.ff->pl || TT.ff->pl->prev)) {
-      more = parse_line(new = get_next_line(TT.ff->source, more+1), &expect);
+      new = get_next_line(TT.ff->source, more+1);
+      // ctrl-C at the editor abandons the whole pending command, not just the
+      // line: an unfinished if/for/quote would otherwise keep the shell at
+      // PS2 with no way back to PS1.
+      if (line_cancelled) {
+        line_cancelled = 0;
+        free(new);
+        more = 0;
+        // an open quote parks its arg count negated (see parse_line())
+        if (TT.ff->pl && TT.ff->pl->prev->arg->c<0)
+          TT.ff->pl->prev->arg->c = -TT.ff->pl->prev->arg->c-1;
+        llist_traverse(TT.ff->pl, free_pipeline);
+        TT.ff->pl = 0;
+        llist_traverse(expect, free);
+        expect = 0;
+        continue;
+      }
+      more = parse_line(new, &expect);
       if (more==1) {
         if (new) continue;
         syntax_err("unexpected end of file");
