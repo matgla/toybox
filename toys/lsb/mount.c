@@ -207,8 +207,10 @@ static void mount_filesystem(char *dev, char *dir, char *type,
       flags |= MS_BIND;
     } else fp = xfopen("/proc/filesystems", "r");
   } else if (!strcmp(type, "ignore")) return;
-  else if (!strcmp(type, "swap"))
-    toys.exitval |= xrun((char *[]){"swapon", "--", dev, 0});
+  // YasOS has no swapon: swap is mount(2) of type "swap", which the kernel
+  // also does for /etc/fstab's swap lines at boot. So -a skips them, as
+  // Linux's mount -a does (swap that is on stays on: there is no swapoff).
+  else if (!strcmp(type, "swap") && FLAG(a)) return;
 
   for (;;) {
     int fd = -1, ro = 0;
