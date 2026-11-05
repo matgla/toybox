@@ -85,7 +85,7 @@ void hwclock_main()
   } else if (FLAG(s)) {
     if (clock_settime(CLOCK_REALTIME, &ts)) perror_exit("clock_settime");
   } else {
-    strftime(toybuf, sizeof(toybuf), "%F %T%z", &tm);
+    strftime(toybuf, TOYBUF_SIZE, "%F %T%z", &tm);
     xputs(toybuf);
   }
 

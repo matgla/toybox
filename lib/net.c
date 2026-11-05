@@ -114,7 +114,7 @@ int pollinate(int in1, int in2, int out1, int out2,
 
     for (i=0; i<pollcount; i++) {
       if (pollfds[i].revents & POLLIN) {
-        int len = read(pollfds[i].fd, libbuf, sizeof(libbuf));
+        int len = read(pollfds[i].fd, libbuf, TOYBUF_SIZE);
         if (len<1) pollfds[i].revents = POLLHUP;
         else {
           callback(i ? out2 : out1, libbuf, len);
@@ -143,7 +143,7 @@ char *ntop(struct sockaddr *sa)
   if (sa->sa_family == AF_INET) addr = &((struct sockaddr_in *)sa)->sin_addr;
   else addr = &((struct sockaddr_in6 *)sa)->sin6_addr;
 
-  inet_ntop(sa->sa_family, addr, libbuf, sizeof(libbuf));
+  inet_ntop(sa->sa_family, addr, libbuf, TOYBUF_SIZE);
 
   return libbuf;
 }

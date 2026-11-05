@@ -411,7 +411,7 @@ static void sed_line(char **pline, long plen)
       if (!TT.xx) {
         terminal_size(&TT.xx, 0);
         if (!TT.xx) TT.xx = 80;
-        if (TT.xx > sizeof(toybuf)-10) TT.xx = sizeof(toybuf)-10;
+        if (TT.xx > TOYBUF_SIZE-10) TT.xx = TOYBUF_SIZE-10;
         if (TT.xx > 4) TT.xx -= 4;
       }
 

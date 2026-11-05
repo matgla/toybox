@@ -54,11 +54,11 @@ void login_main(void)
     tcflush(0, TCIFLUSH);
 
     if (!username) {
-      if (gethostname(toybuf, sizeof(toybuf)-1)) *toybuf = 0;
+      if (gethostname(toybuf, TOYBUF_SIZE-1)) *toybuf = 0;
       printf("%s%slogin: ", *toybuf ? toybuf : "", *toybuf ? " " : "");
       fflush(stdout);
 
-      if(!fgets(toybuf, sizeof(toybuf)-1, stdin)) xexit();
+      if(!fgets(toybuf, TOYBUF_SIZE-1, stdin)) xexit();
 
       // Remove trailing \n and so on
       for (ss = toybuf; *ss; ss++) if (*ss<=' ' || *ss==':') break;
@@ -88,11 +88,11 @@ void login_main(void)
     } else if (TT.f) error_exit("bad -f '%s'", TT.f);
 
     // Verify password. (Prompt for password _before_ checking disable state.)
-    if (!read_password(toybuf, sizeof(toybuf), "Password: ")) {
+    if (!read_password(toybuf, TOYBUF_SIZE, "Password: ")) {
       int x = pass && (ss = crypt(toybuf, pass)) && !strcmp(pass, ss);
 
       // password go bye-bye now.
-      memset(toybuf, 0, sizeof(toybuf));
+      memset(toybuf, 0, TOYBUF_SIZE);
       if (x) break;
     }
 
@@ -112,7 +112,7 @@ void login_main(void)
   // Check twice because "this file exists" is a security test, and in
   // theory filehandle exhaustion or other error could make open/read fail.
   if (pwd->pw_uid && !access("/etc/nologin", R_OK)) {
-    ss = readfile("/etc/nologin", toybuf, sizeof(toybuf));
+    ss = readfile("/etc/nologin", toybuf, TOYBUF_SIZE);
     puts ((ss && *ss) ? ss : "nologin");
     free(ss);
     toys.exitval = 1;

@@ -22,7 +22,7 @@ void lsmod_main(void)
 
   xprintf("%-23s Size  Used by\n", "Module");
 
-  while (fgets(toybuf, sizeof(toybuf), file)) {
+  while (fgets(toybuf, TOYBUF_SIZE, file)) {
     char *name = strtok(toybuf, " "), *size = strtok(NULL, " "),
          *refcnt = strtok(NULL, " "), *users = strtok(NULL, " ");
 

@@ -39,7 +39,7 @@ GLOBALS(
 )
 
 struct fstype {
-  char *name;
+  char *ROREL name;
   uint64_t magic;
   int magic_len, magic_offset, uuid_off, label_len, label_off;
 } static const fstypes[] = {
@@ -116,15 +116,15 @@ static void do_blkid(int fd, char *name)
     int pass = 0;
 
     // Read next block of data
-    len = readall(fd, toybuf, sizeof(toybuf));
-    if (len != sizeof(toybuf)) return;
+    len = readall(fd, toybuf, TOYBUF_SIZE);
+    if (len != TOYBUF_SIZE) return;
 
     // Iterate through types in range
     for (i=0; i<ARRAY_LEN(fstypes); i++) {
       uint64_t test;
 
       // Skip tests not in this 4k block
-      if (fstypes[i].magic_offset + fstypes[i].magic_len > off+sizeof(toybuf)) {
+      if (fstypes[i].magic_offset + fstypes[i].magic_len > off+TOYBUF_SIZE) {
         pass++;
         continue;
       }
@@ -235,7 +235,7 @@ void blkid_main(void)
     char name[32], device[5+32];
     FILE *fp = xfopen("/proc/partitions", "r");
 
-    while (fgets(toybuf, sizeof(toybuf), fp)) {
+    while (fgets(toybuf, TOYBUF_SIZE, fp)) {
       if (sscanf(toybuf, " %u %u %u %31s", &ma, &mi, &sz, name) != 4)
         continue;
 

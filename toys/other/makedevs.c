@@ -87,7 +87,7 @@ void makedevs_main(void)
 
     for (i = 0; (!cnt && !i) || i < cnt; i++) {
       if (cnt>1) {
-        snprintf(toybuf, sizeof(toybuf), "%.999s%u", node, st_val + i);
+        snprintf(toybuf, TOYBUF_SIZE, "%.999s%u", node, st_val + i);
         ptr = toybuf;
       } else ptr = node;
 

@@ -65,10 +65,10 @@ void mkpasswd_main(void)
   if (!*toys.optargs) {
     // Prompt and read interactively?
     if (isatty(0)) {
-      if (read_password(toybuf, sizeof(toybuf), "Password: "))
+      if (read_password(toybuf, TOYBUF_SIZE, "Password: "))
         perror_exit("password read failed");
     } else {
-      for (ii = 0; ii<sizeof(toybuf)-1; ii++) {
+      for (ii = 0; ii<TOYBUF_SIZE-1; ii++) {
         if (!xread(0, toybuf+ii, 1)) break;
         if (toybuf[ii] == '\n' || toybuf[ii] == '\r') break;
       }

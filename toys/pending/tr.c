@@ -189,7 +189,7 @@ static void print_map(char *set1, char *set2)
 {
   int n, ch, src, dst, prev = -1;
 
-  while ((n = read(0, toybuf, sizeof(toybuf)))) {
+  while ((n = read(0, toybuf, TOYBUF_SIZE))) {
     if (!FLAG(d) && !FLAG(s))
       for (dst = 0; dst < n; dst++) toybuf[dst] = TT.map[toybuf[dst]];
     else for (src = dst = 0; src < n; src++) {

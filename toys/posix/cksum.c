@@ -44,7 +44,7 @@ static void do_cksum(int fd, char *name)
   // Init table, loop through data
   crc_init(crc_table, FLAG(L));
   for (;;) {
-    len = read(fd, toybuf, sizeof(toybuf));
+    len = read(fd, toybuf, TOYBUF_SIZE);
     if (len<0) perror_msg_raw(name);
     if (len<1) {
       // CRC the length at end

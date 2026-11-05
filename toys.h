@@ -88,27 +88,29 @@
 #define HELP_SEE     4  // "See COMMAND" instead of dereferencing alias
 #define HELP_HTML    8  // Output HTML
 
-struct toy_list *toy_find(char *name);
+struct toy_entry *toy_find(char *name);
 void show_help(int full);
 void check_help(char **arg);
-void toy_singleinit(struct toy_list *which, char *argv[]);
-void toy_init(struct toy_list *which, char *argv[]);
-void toy_exec_which(struct toy_list *which, char *argv[]);
+void toy_singleinit(struct toy_entry *which, char *argv[]);
+void toy_init(struct toy_entry *which, char *argv[]);
+void toy_exec_which(struct toy_entry *which, char *argv[]);
 void toy_exec(char *argv[]);
 
 // Array of available commands
 
-extern struct toy_list {
-  char *name;
-  void (*toy_main)(void);
-  char *options;
+struct toy_entry {
+  char *ROREL name;
+  char *ROREL options;
   unsigned flags;
-} toy_list[];
+};
+extern const struct toy_entry toy_list_ro[];
+#define toy_list ((struct toy_entry *)toy_list_ro)
+void toy_run(struct toy_entry *which);
 
 // Global context shared by all commands.
 
 extern struct toy_context {
-  struct toy_list *which;  // Which entry in toy_list is this one?
+  struct toy_entry *which;  // Which entry in toy_list is this one?
   char **argv;             // Original command line arguments
   char **optargs;          // Arguments left over from get_optflags()
   unsigned long long optflags; // Command line option flags from get_optflags()
@@ -129,7 +131,14 @@ extern struct toy_context {
 
 // Two big temporary buffers: one for use by commands, one for library functions
 
-extern char **environ, *toybox_version, toybuf[4096], libbuf[4096];
+extern char **environ, *toybox_version, *toybuf_p, *libbuf_p;
+#define TOYBUF_SIZE 4096
+// Mapped on first use, in slow memory: a shell that sits idle has no use for 8 KiB
+// of fast RAM.  Safe in a vfork child: its pages die with it, and the pointer comes
+// back with the rest of the parent's data.
+char *toybuf_get(char **slot);
+#define toybuf (toybuf_p ? toybuf_p : toybuf_get(&toybuf_p))
+#define libbuf (libbuf_p ? libbuf_p : toybuf_get(&libbuf_p))
 
 #define FLAG(x) (!!(toys.optflags&FLAG_##x))  // Return 1 if flag set, 0 if not
 

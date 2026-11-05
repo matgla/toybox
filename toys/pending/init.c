@@ -214,8 +214,8 @@ static void run_command(char *command)
     char *extracted_command;
     int x = 0;
 
-    next_command = strncpy(toybuf, command - hyphen, sizeof(toybuf));
-    next_command[sizeof(toybuf) - 1] = toybuf[sizeof(toybuf) - 1 ] = '\0';
+    next_command = strncpy(toybuf, command - hyphen, TOYBUF_SIZE);
+    next_command[TOYBUF_SIZE - 1] = toybuf[TOYBUF_SIZE - 1 ] = '\0';
     command = next_command + hyphen;
     while ((extracted_command = strsep(&next_command," \t"))) {
       if (*extracted_command) {
@@ -225,7 +225,7 @@ static void run_command(char *command)
     }
     final_command[x] = NULL;
   } else {
-    snprintf(toybuf, sizeof(toybuf), "exec %s", command);
+    snprintf(toybuf, TOYBUF_SIZE, "exec %s", command);
     command = "-/bin/sh"+1;
     final_command[0] = ("-/bin/sh"+!hyphen);
     final_command[1] = "-c";

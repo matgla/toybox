@@ -612,7 +612,7 @@ void dhcp6_main(void)
         continue;
       }
     } else if (FD_ISSET(TT.sock, &rfds)) {
-      if ((TT.status = read(TT.sock, toybuf, sizeof(toybuf))) <= 0) continue;
+      if ((TT.status = read(TT.sock, toybuf, TOYBUF_SIZE)) <= 0) continue;
       mymsg = (dhcp6_raw_t*)toybuf;
       if (ntohs(mymsg->udph.dest) == 546 &&
               !memcmp(mymsg->dhcp6.transaction_id, TT.transction_id, 3)) {

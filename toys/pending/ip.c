@@ -341,7 +341,7 @@ static char *rtmtype_idx2str(u_int8_t idx)
   char *name = idx_to_string(idx, rtmtypes);
 
   if (!name) snprintf(toybuf, RPDB_ENTRIES, "%u", idx);
-  else snprintf(toybuf, sizeof(toybuf), "%s", name);
+  else snprintf(toybuf, TOYBUF_SIZE, "%s", name);
   return toybuf;
 }
 
@@ -1648,7 +1648,7 @@ static int display_route_info(struct nlmsghdr *mhdr, char **argv)
     sprintf(out,"%s%s ", out,rtmtype_idx2str(msg->rtm_type));
   if (attr[RTA_DST]) {
     inetval = (char *)inet_ntop(msg->rtm_family, RTA_DATA(attr[RTA_DST]),
-        toybuf, sizeof(toybuf));
+        toybuf, TOYBUF_SIZE);
     if (gfilter.rdst.family &&
         memcmp(RTA_DATA(attr[RTA_DST]), &gfilter.rdst.addr, gfilter.rdst.len))
       return 0;
@@ -1662,7 +1662,7 @@ static int display_route_info(struct nlmsghdr *mhdr, char **argv)
 
   if (attr[RTA_SRC]) {
     inetval = (char *)inet_ntop(msg->rtm_family, RTA_DATA(attr[RTA_SRC]),
-        toybuf, sizeof(toybuf));
+        toybuf, TOYBUF_SIZE);
     if (gfilter.rsrc.family &&
         memcmp(RTA_DATA(attr[RTA_SRC]), &gfilter.rsrc.addr, gfilter.rsrc.len))
       return 0;
@@ -1675,7 +1675,7 @@ static int display_route_info(struct nlmsghdr *mhdr, char **argv)
 
   if (attr[RTA_GATEWAY]) {
     inetval = (char *)inet_ntop(msg->rtm_family, RTA_DATA(attr[RTA_GATEWAY]),
-        toybuf, sizeof(toybuf));
+        toybuf, TOYBUF_SIZE);
     sprintf(out, "%s via %s ", out, inetval);
   }
   if (gfilter.rvia.family) {
@@ -1696,7 +1696,7 @@ static int display_route_info(struct nlmsghdr *mhdr, char **argv)
 
   if (attr[RTA_PREFSRC] && hlen) {
     inetval = (char *)inet_ntop(msg->rtm_family, RTA_DATA(attr[RTA_PREFSRC]),
-        toybuf, sizeof(toybuf));
+        toybuf, TOYBUF_SIZE);
     sprintf(out, "%s src %s ", out, inetval);
   }
   if (attr[RTA_PRIORITY])
@@ -1764,7 +1764,7 @@ static int display_route_info(struct nlmsghdr *mhdr, char **argv)
 
     while (1) {
       struct nlmsghdr *mhdr;
-      int msglen = recv(sockfd, toybuf, sizeof(toybuf), 0);
+      int msglen = recv(sockfd, toybuf, TOYBUF_SIZE, 0);
 
       if ((msglen < 0) && (errno == EINTR || errno == EAGAIN)) continue;
       else if (msglen < 0) {
@@ -2379,7 +2379,7 @@ static int show_rules(struct nlmsghdr *mhdr,
   if (attr[RTA_SRC]) {
     printf("%s", (msg->rtm_family == AF_INET || msg->rtm_family == AF_INET6)
         ? inet_ntop(msg->rtm_family, RTA_DATA(attr[RTA_SRC]),
-          toybuf, sizeof(toybuf))
+          toybuf, TOYBUF_SIZE)
         : "???");
     (msg->rtm_src_len != hlen) ? printf("/%u", msg->rtm_src_len) : 0;
   } else msg->rtm_src_len ? printf("0/%d", msg->rtm_src_len) : printf("all");
@@ -2388,7 +2388,7 @@ static int show_rules(struct nlmsghdr *mhdr,
   if (attr[RTA_DST]) {
     printf("to %s", (msg->rtm_family == AF_INET || msg->rtm_family == AF_INET6)
         ? inet_ntop(msg->rtm_family, RTA_DATA(attr[RTA_DST]),
-          toybuf, sizeof(toybuf))  : "???");
+          toybuf, TOYBUF_SIZE)  : "???");
     (msg->rtm_dst_len != hlen) ? printf("/%u", msg->rtm_dst_len) : xputc(' ');
   } else if (msg->rtm_dst_len)
     printf("to 0/%d ", msg->rtm_dst_len);
@@ -2416,7 +2416,7 @@ static int show_rules(struct nlmsghdr *mhdr,
   if (msg->rtm_type == RTN_NAT) {
     if (!attr[RTA_GATEWAY]) printf("masquerade");
     else printf("map-to %s ", inet_ntop(msg->rtm_family,
-          RTA_DATA(attr[RTA_GATEWAY]), toybuf, sizeof(toybuf)));
+          RTA_DATA(attr[RTA_GATEWAY]), toybuf, TOYBUF_SIZE));
   } else if (msg->rtm_type != RTN_UNICAST)
     printf("%s", rtmtype_idx2str(msg->rtm_type));
 
@@ -2535,7 +2535,7 @@ static int read_tunnel(struct ip_tunnel_parm *ptnl)
   struct ip_tunnel_parm iptnl;
   FILE *fp = xfopen("/proc/net/dev", "r");
 
-  while (fgets(toybuf, sizeof(toybuf), fp)) {
+  while (fgets(toybuf, TOYBUF_SIZE, fp)) {
     char *ptr;
     int ret;
 

@@ -51,7 +51,7 @@ static int validate_password(char *pwd)
     alarm(TT.timeout);
   }
 
-  ret = read_password(toybuf, sizeof(toybuf), s);
+  ret = read_password(toybuf, TOYBUF_SIZE, s);
   if(TT.timeout) alarm(0);
 
   if ( ret && !toybuf[0]) {
@@ -68,7 +68,7 @@ static int validate_password(char *pwd)
 
 static void run_shell(char *shell)
 {
-  snprintf(toybuf,sizeof(toybuf), "-%s", shell);
+  snprintf(toybuf,TOYBUF_SIZE, "-%s", shell);
   execl(shell, toybuf, NULL);
   error_exit("Failed to spawn shell");
 }

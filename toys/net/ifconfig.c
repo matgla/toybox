@@ -149,7 +149,7 @@ static void display_ifconfig(char *name, int always, unsigned long long val[])
       for (i=0; i<6; i++) xprintf(":%02x"+!i, ifre.ifr_hwaddr.sa_data[i]);
     }
     sprintf(toybuf, "/sys/class/net/%.15s/device/driver", name);
-    if (readlink0(toybuf, toybuf, sizeof(toybuf))>0)
+    if (readlink0(toybuf, toybuf, TOYBUF_SIZE)>0)
       if ((pp = strrchr(toybuf, '/'))) xprintf("  Driver %s", pp+1);
     xputc('\n');
   }
@@ -196,7 +196,7 @@ static void display_ifconfig(char *name, int always, unsigned long long val[])
     char iface_name[IFNAMSIZ];
     int plen, iscope;
 
-    while (fgets(toybuf, sizeof(toybuf), fp)) {
+    while (fgets(toybuf, TOYBUF_SIZE, fp)) {
       int nitems;
       char ipv6_addr[40];
 
@@ -216,7 +216,7 @@ static void display_ifconfig(char *name, int always, unsigned long long val[])
 
         // Convert to binary and back to get abbreviated :: version
         if (inet_pton(AF_INET6, ipv6_addr, (void *)&s6.sin6_addr) > 0) {
-          if (inet_ntop(AF_INET6, &s6.sin6_addr, toybuf, sizeof(toybuf))) {
+          if (inet_ntop(AF_INET6, &s6.sin6_addr, toybuf, TOYBUF_SIZE)) {
             char *scopes[] = {"Global","Host","Link","Site","Compat"},
                  *scope = "Unknown";
 
@@ -306,7 +306,7 @@ static void show_iface(char *iface_name)
 
   fp = xfopen("/proc/net/dev", "r");
 
-  for (i=0; fgets(toybuf, sizeof(toybuf), fp); i++) {
+  for (i=0; fgets(toybuf, TOYBUF_SIZE, fp); i++) {
     char *buf = toybuf;
     unsigned long long val[17];
 

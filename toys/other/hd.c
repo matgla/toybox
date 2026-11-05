@@ -40,7 +40,7 @@ static void do_hd(int fd, char *name)
 {
   int off, len;
 
-  while (0<(len = xread(fd, toybuf, sizeof(toybuf)))) {
+  while (0<(len = xread(fd, toybuf, TOYBUF_SIZE))) {
     for (off = 0; off<len; off++) {
       if (!TT.pos) printf("%08lx", TT.len);
       TT.len++;

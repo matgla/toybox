@@ -125,8 +125,8 @@ enum { SI_TO_SI = 1, SI_TO_I, I_TO_I, S_TO_SI };
 enum { OR = 1, AND, EQ, NE, GT, GTE, LT, LTE, ADD, SUB, MUL, DIVI, MOD, RE };
 
 // operators grouped by precedence
-static struct op_def {
-  char *tok;
+static const struct op_def {
+  char *ROREL tok;
   char prec, sig, op; // precedence, signature for type coercion, operator ID
 } OPS[] = {
   // logical ops, precedence 1 and 2, signature SI_TO_SI

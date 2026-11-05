@@ -23,7 +23,7 @@ void pwdx_main(void)
     char *path = toybuf;
 
     sprintf(toybuf, "/proc/%d/cwd", atoi(*optargs));
-    if (!readlink0(path, toybuf, sizeof(toybuf))) {
+    if (!readlink0(path, toybuf, TOYBUF_SIZE)) {
       path = strerror(errno);
       toys.exitval = 1;
     }

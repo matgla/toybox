@@ -35,7 +35,7 @@ void who_main(void)
       time_t t = entry->ut_tv.tv_sec;
       struct tm *tm = localtime(&t);
 
-      strftime(toybuf, sizeof(toybuf), "%F %H:%M", tm);
+      strftime(toybuf, TOYBUF_SIZE, "%F %H:%M", tm);
       printf("%s\t%s\t%s (%s)\n", entry->ut_user, entry->ut_line,
         toybuf, entry->ut_host);
     }

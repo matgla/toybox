@@ -59,10 +59,10 @@ void su_main()
     if (!(shadow = get_userline("/etc/shadow", name)))
       perror_exit("no '%s'", name);
     if (*shadow[1] != '$') goto deny;
-    if (read_password(toybuf, sizeof(toybuf), "Password: ")) goto deny;
+    if (read_password(toybuf, TOYBUF_SIZE, "Password: ")) goto deny;
     passhash = crypt(toybuf, shadow[1]);
     if (!passhash || strcmp(passhash, shadow[1])) name = 0;
-    memset(toybuf, 0, sizeof(toybuf));
+    memset(toybuf, 0, TOYBUF_SIZE);
     memset(shadow[1], 0, strlen(shadow[1]));
     if (passhash) memset(passhash, 0, strlen(passhash));
     if (!name) goto deny;

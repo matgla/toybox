@@ -24,7 +24,7 @@ config HELP
 #define FOR_help
 #include "toys.h"
 
-static void do_help(struct toy_list *t)
+static void do_help(struct toy_entry *t)
 {
   if (FLAG(h))
     xprintf("<a name=\"%s\"><h1>%s</h1><blockquote><pre>\n", t->name, t->name);
@@ -53,7 +53,7 @@ void help_main(void)
   }
 
   if (!FLAG(a)) {
-    struct toy_list *t = toys.which, *tt;
+    struct toy_entry *t = toys.which, *tt;
 
     // Zero which to include "toybox" in search, put it back for error msg
     toys.which = 0;

@@ -181,7 +181,7 @@ static char *get_range(void *data, char *str, int len)
   unsigned *pairs = (void *)toybuf, i;
 
   // Using toybuf[] to store ranges means we can have 512 selections max.
-  if (TT.pairs == sizeof(toybuf)/sizeof(int)) perror_exit("select limit");
+  if (TT.pairs == TOYBUF_SIZE/sizeof(int)) perror_exit("select limit");
   pairs += 2*TT.pairs++;
 
   pairs[1] = UINT_MAX;

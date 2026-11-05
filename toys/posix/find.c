@@ -283,7 +283,7 @@ static int do_find(struct dirtree *new)
       // Deactivate this parenthetical if !test
       // Note: test value should never change while !active
       } else if (*s == '(') {
-        if (pcount == sizeof(toybuf)) goto error;
+        if (pcount == TOYBUF_SIZE) goto error;
         toybuf[pcount++] = not+(active<<1);
         if (!check) active = 0;
         not = 0;

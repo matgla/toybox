@@ -190,7 +190,7 @@ static void show_conf(int i, struct config *c, const char *path)
     if (l == -1) puts("undefined");
     else printf("%ld\n", l);
   } else if (i==2) {
-    confstr(c->value, toybuf, sizeof(toybuf));
+    confstr(c->value, toybuf, TOYBUF_SIZE);
     puts(toybuf);
   } else if (i==3) printf("%lld\n", c->value);
   // LFS_CFLAGS on 32 bit should enable Large File Support for kernel builds

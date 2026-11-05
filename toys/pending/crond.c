@@ -480,7 +480,7 @@ static void sendmail(CRONFILE *cfile, JOB *job)
     job->needstart = 1;
     return;
   }
-  snprintf(toybuf, sizeof(toybuf), "/var/spool/cron/cron.%s.%d",
+  snprintf(toybuf, TOYBUF_SIZE, "/var/spool/cron/cron.%s.%d",
       cfile->username, (int)pid);
 
   mailfd = open(toybuf, O_RDONLY);
@@ -544,7 +544,7 @@ static void execute_jobs(void)
           int mailfd = -1;
 
           job->mailsize = job->pid = 0;
-          snprintf(toybuf, sizeof(toybuf), "/var/spool/cron/cron.%s.%d",
+          snprintf(toybuf, TOYBUF_SIZE, "/var/spool/cron/cron.%s.%d",
               cfile->username, getpid());
           if ((mailfd = open(toybuf, O_CREAT|O_TRUNC|O_WRONLY|O_EXCL|O_APPEND,
                   0600)) < 0) {

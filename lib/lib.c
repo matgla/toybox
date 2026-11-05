@@ -152,7 +152,7 @@ off_t lskip(int fd, off_t offset)
   }
 
   while (offset>0) {
-    int try = offset>sizeof(libbuf) ? sizeof(libbuf) : offset, or;
+    int try = offset>TOYBUF_SIZE ? TOYBUF_SIZE : offset, or;
 
     or = readall(fd, libbuf, try);
     if (or < 0) perror_exit("lskip to %lld", (long long)offset);
@@ -1143,7 +1143,7 @@ void names_to_pid(char **names, int (*callback)(pid_t pid, char *name),
     // but it's limited to 15 characters
     if (scripts) {
       sprintf(libbuf, "/proc/%u/comm", u);
-      len = sizeof(libbuf);
+      len = TOYBUF_SIZE;
       if (!(comm = readfileat(AT_FDCWD, libbuf, libbuf, &len)) || !len)
         continue;
       if (libbuf[len-1] == '\n') libbuf[--len] = 0;
@@ -1171,7 +1171,7 @@ void names_to_pid(char **names, int (*callback)(pid_t pid, char *name),
       // Nope, gotta read command line to confirm
       if (!cmd) {
         sprintf(cmd = libbuf+16, "/proc/%u/cmdline", u);
-        len = sizeof(libbuf)-17;
+        len = TOYBUF_SIZE-17;
         if (!(cmd = readfileat(AT_FDCWD, cmd, cmd, &len))) continue;
         // readfile only guarantees one null terminator and we need two
         // (yes the kernel should do this for us, don't care)

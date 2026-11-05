@@ -143,7 +143,7 @@ void watch_main(void)
     }
     if (pfd[0].revents&POLLHUP) xexit();
     if (active) {
-      if (pfd[1].revents&POLLIN) len = read(fds[1], toybuf, sizeof(toybuf)-1);
+      if (pfd[1].revents&POLLIN) len = read(fds[1], toybuf, TOYBUF_SIZE-1);
       if (pfd[1].revents&POLLHUP) active = 0;
     }
 

@@ -136,9 +136,9 @@ static void show_ip(char *fname)
   FILE *fp = xfopen(fname, "r");
 
   // Skip header.
-  (void)fgets(toybuf, sizeof(toybuf), fp);
+  (void)fgets(toybuf, TOYBUF_SIZE, fp);
 
-  while (fgets(toybuf, sizeof(toybuf), fp)) {
+  while (fgets(toybuf, TOYBUF_SIZE, fp)) {
     char lip[256], rip[256];
     union {
       struct {unsigned u; unsigned char b[4];} i4;
@@ -206,7 +206,7 @@ static void show_unix_sockets(void)
   FILE *fp = xfopen("/proc/net/unix", "r");
 
   // Skip header.
-  (void)fgets(toybuf, sizeof(toybuf), fp);
+  (void)fgets(toybuf, TOYBUF_SIZE, fp);
 
   while (fscanf(fp, "%*p: %lX %*X %lX %lX %lX %lu%m[^\n]", &refcount, &flags,
                 &type, &state, &inode, &filename) >= 5) {
@@ -259,7 +259,7 @@ static int scan_pids(struct dirtree *node)
   if (!(dp = fdopendir(dirfd))) close(dirfd);
   else while ((entry = readdir(dp))) {
     s = toybuf+256;
-    if (!readlinkat0(dirfd, entry->d_name, s, sizeof(toybuf)-256)) continue;
+    if (!readlinkat0(dirfd, entry->d_name, s, TOYBUF_SIZE-256)) continue;
     // Can the "[0000]:" happen in a modern kernel?
     if (strstart(&s, "socket:[") || strstart(&s, "[0000]:")) {
       long long ll = atoll(s);
@@ -287,7 +287,7 @@ static void display_routes(void)
   FILE *fp = xfopen("/proc/net/route", "r");
 
   // Skip header.
-  (void)fgets(toybuf, sizeof(toybuf), fp);
+  (void)fgets(toybuf, TOYBUF_SIZE, fp);
 
   printf("Kernel IP routing table\n"
           "Destination\tGateway \tGenmask \tFlags %s Iface\n",

@@ -228,7 +228,7 @@ static void append_base(char *base)
     int size = 1;
 
     if (!*s) return;
-    if (TT.types >= sizeof(toybuf)/sizeof(struct odtype)) break;
+    if (TT.types >= TOYBUF_SIZE/sizeof(struct odtype)) break;
     if (-1 == (type = stridx("acduox"USE_TOYBOX_FLOAT("f"), *(s++)))) break;
 
     if (isdigit(*s)) {

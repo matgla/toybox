@@ -115,16 +115,16 @@ void kill_main(void)
 
       if (!(procpid = atoi(entry->d_name))) continue;
 
-      snprintf(toybuf, sizeof(toybuf), "/proc/%d/stat", procpid);
-      if (!readfile(toybuf, toybuf, sizeof(toybuf))) continue;
+      snprintf(toybuf, TOYBUF_SIZE, "/proc/%d/stat", procpid);
+      if (!readfile(toybuf, toybuf, TOYBUF_SIZE)) continue;
       // command name can have embedded space and/or )
       if (!(tmp = strrchr(toybuf, ')'))
           || sscanf(tmp, " %*c %*d %*d %d", &procsid) != 1) continue;
       if (pid == procpid || sid == procsid || procpid == 1) continue;
 
       // Check for kernel threads.
-      snprintf(toybuf, sizeof(toybuf), "/proc/%d/cmdline", procpid);
-      if (!readfile(toybuf, toybuf, sizeof(toybuf)) || !*toybuf) continue;
+      snprintf(toybuf, TOYBUF_SIZE, "/proc/%d/cmdline", procpid);
+      if (!readfile(toybuf, toybuf, TOYBUF_SIZE) || !*toybuf) continue;
 
       // Check with omit list.
       for (count = 0; count < ocount; count++)

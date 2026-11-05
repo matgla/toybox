@@ -137,7 +137,7 @@ void sntp_main(void)
       // Wait to receive a packet
 
       if (then>0 && then<(now = millitime())) break;;
-      strike = xrecvwait(fd, toybuf, sizeof(toybuf), &sa, then-now);
+      strike = xrecvwait(fd, toybuf, TOYBUF_SIZE, &sa, then-now);
       if (strike<1) {
         if (!(FLAG(S)||FLAG(m)||FLAG(D)||FLAG(d)) && ++tries == 3)
           error_exit("no reply from %s", *toys.optargs);
@@ -219,7 +219,7 @@ void sntp_main(void)
 
         // Display the time and offset
         if (!FLAG(q)) {
-          format_iso_time(toybuf, sizeof(toybuf)-1, &tv2);
+          format_iso_time(toybuf, TOYBUF_SIZE-1, &tv2);
           printf("%s offset %c%lld.%09lld secs\n", toybuf, (diff<0) ? '-' : '+',
             llabs(diff/1000000000), llabs(diff%1000000000));
         }

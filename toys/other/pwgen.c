@@ -41,7 +41,7 @@ void pwgen_main(void)
   if (isatty(1)) terminal_size(&xx, &yy);
   else toys.optflags |= FLAG_1;
 
-  if (toys.optc && (length = atolx(*toys.optargs))>sizeof(toybuf))
+  if (toys.optc && (length = atolx(*toys.optargs))>TOYBUF_SIZE)
     error_exit("bad length");
   if (toys.optc>1) count = atolx(toys.optargs[1]);
   else count = FLAG(1) ? 1 : (xx/(length+1))*(yy-1);

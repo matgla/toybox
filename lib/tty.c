@@ -147,7 +147,7 @@ void xset_terminal(int fd, int raw, int speed, struct termios *old)
 
 struct scan_key_list {
   int key;
-  char *seq;
+  char *ROREL seq;
 } static const scan_key_list[] = {
   {KEY_UP, "\e[A"}, {KEY_DOWN, "\e[B"},
   {KEY_RIGHT, "\e[C"}, {KEY_LEFT, "\e[D"},

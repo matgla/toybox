@@ -357,7 +357,7 @@ static int get_interface(const char *interface, int *ifindex, void *oip,
     uint8_t *oip6 = (uint8_t*)oip;
     int i;
 
-    while(fgets(toybuf, sizeof(toybuf), fd6)) {
+    while(fgets(toybuf, TOYBUF_SIZE, fd6)) {
       if (!strstr(toybuf, interface))
         continue;
 

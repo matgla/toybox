@@ -149,7 +149,7 @@ void host_main(void)
         : "Additional information:");
 
     for (; count--; p += pllen) {
-      p += xdn_expand(abuf, abuf+alen, p, toybuf, sizeof(toybuf)-t2len);
+      p += xdn_expand(abuf, abuf+alen, p, toybuf, TOYBUF_SIZE-t2len);
       if (alen-(p-abuf)<10) error_exit("bad header");
       type = peek_be(p, 2);
       p += 4;

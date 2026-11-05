@@ -1095,7 +1095,7 @@ void tar_main(void)
 
     // autodetect compression type when not specified
     if (!(FLAG(j)||FLAG(z)||FLAG(I)||FLAG(J)||FLAG(Z))) {
-      len = xread(TT.fd, hdr = toybuf+sizeof(toybuf)-512, 512);
+      len = xread(TT.fd, hdr = toybuf+TOYBUF_SIZE-512, 512);
       if (len!=512 || !is_tar_header(hdr)) {
         // detect gzip and bzip signatures
         if (SWAP_BE16(*(short *)hdr)==0x1f8b) toys.optflags |= FLAG_z;
@@ -1144,7 +1144,7 @@ void tar_main(void)
         // loop writing collated data to zip proc
         xwrite(0, hdr, len);
         for (;;) {
-          if ((i = read(TT.fd, toybuf, sizeof(toybuf)))<1) {
+          if ((i = read(TT.fd, toybuf, TOYBUF_SIZE))<1) {
             close(0);
             xwaitpid(pid);
             return;
@@ -1157,7 +1157,7 @@ void tar_main(void)
     unpack_tar(hdr);
     dirflush(0, 0);
     // Shut up archiver about inability to write all trailing NULs to pipe buf
-    while (0<read(TT.fd, toybuf, sizeof(toybuf)));
+    while (0<read(TT.fd, toybuf, TOYBUF_SIZE));
 
     // Each time a TT.incl entry is seen it's moved to the end of the list,
     // with TT.seen pointing to first seen list entry. Anything between

@@ -42,12 +42,12 @@ void chsh_main()
   } else user = (passwd_info = xgetpwuid(getuid()))->pw_name;
 
   // Get a password, encrypt it, wipe it, and check it
-  if (mlock(toybuf, sizeof(toybuf))) perror_exit("mlock");
+  if (mlock(toybuf, TOYBUF_SIZE)) perror_exit("mlock");
   if (!(shadow_info = getspnam(passwd_info->pw_name))) perror_exit("getspnam");
-  if (read_password(toybuf, sizeof(toybuf), "Password: ")) *toybuf = 0;
+  if (read_password(toybuf, TOYBUF_SIZE, "Password: ")) *toybuf = 0;
   if (!(encrypted = crypt(toybuf, shadow_info->sp_pwdp))) perror_exit("crypt");
-  memset(toybuf, 0, sizeof(toybuf));
-  munlock(toybuf, sizeof(toybuf)); // prevents memset from "optimizing" away.
+  memset(toybuf, 0, TOYBUF_SIZE);
+  munlock(toybuf, TOYBUF_SIZE); // prevents memset from "optimizing" away.
   if (strcmp(encrypted, shadow_info->sp_pwdp)) perror_exit("Bad password");
 
   // Get new shell (either -s or interactive)

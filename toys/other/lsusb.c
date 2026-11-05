@@ -78,7 +78,7 @@ struct scanloop {
 static int scan_uevent(struct dirtree *new, int len, struct scanloop *sl)
 {
   int ii, saw = 0;
-  off_t flen = sizeof(toybuf);
+  off_t flen = TOYBUF_SIZE;
   char *ss = toybuf, *yy;
 
   // Read data
@@ -197,7 +197,7 @@ static int list_usb(struct dirtree *new)
 
 static char *readat(int dir, char *name)
 {
-  off_t len = sizeof(toybuf);
+  off_t len = TOYBUF_SIZE;
 
   return readfileat(dir, name, toybuf, &len) ? : "";
 }
@@ -293,7 +293,7 @@ static int list_usb_verbose(struct dirtree *new)
   int busnum = 0, devnum = 0, pid = 0, vid = 0;
   char *n1, *n2;
   char *path = NULL;
-  off_t file_len = sizeof(toybuf);
+  off_t file_len = TOYBUF_SIZE;
   int len, fd;
   unsigned char *descriptors_data;
   unsigned char *p = (unsigned char *)toybuf;
@@ -464,7 +464,7 @@ static int list_pci(struct dirtree *new)
 {
   char *driver = 0, buf[16], *ss = toybuf, *names[3];
   int cvd[3] = {0}, ii, revision = 0;
-  off_t len = sizeof(toybuf);
+  off_t len = TOYBUF_SIZE;
   /* skip 0000: part by default */
   char *bus = strchr(new->name, ':') + 1;
 
@@ -510,7 +510,7 @@ static int list_pci(struct dirtree *new)
     FILE *fp;
     int b, col = 0, max = (TT.x >= 4) ? 4096 : ((TT.x >= 3) ? 256 : 64);
 
-    snprintf(toybuf, sizeof(toybuf), "/sys/bus/pci/devices/%s/config", new->name);
+    snprintf(toybuf, TOYBUF_SIZE, "/sys/bus/pci/devices/%s/config", new->name);
     fp = xfopen(toybuf, "r");
     while ((b = fgetc(fp)) != EOF) {
       if ((col % 16) == 0) printf("%02x: ", col & ~0xf);

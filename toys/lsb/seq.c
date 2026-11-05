@@ -84,7 +84,7 @@ void seq_main(void)
     if (dd != slen) inc = 0;
   }
   if (!FLAG(f)) sprintf(TT.f = fbuf, "%%0%ld.%df", len, TT.precision);
-  TT.buflen = sizeof(toybuf)-sizeof(fbuf)-len-TT.precision-strlen(TT.s);
+  TT.buflen = TOYBUF_SIZE-sizeof(fbuf)-len-TT.precision-strlen(TT.s);
   if (TT.buflen<0) error_exit("bad -s");
 
   // fast path: when everything fits in a long with no flags.

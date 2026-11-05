@@ -22,7 +22,7 @@ void insmod_main(void)
 
   i = 1;
   while (toys.optargs[i] &&
-    strlen(toybuf) + strlen(toys.optargs[i]) + 2 < sizeof(toybuf))
+    strlen(toybuf) + strlen(toys.optargs[i]) + 2 < TOYBUF_SIZE)
   {
     strcat(toybuf, toys.optargs[i++]);
     strcat(toybuf, " ");

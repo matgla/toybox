@@ -46,7 +46,7 @@ void hash_by_name(int fd, char *name, char *result)
 
   hash->init(&ctx);
   for (;;) {
-      i = read(fd, libbuf, sizeof(libbuf));
+      i = read(fd, libbuf, TOYBUF_SIZE);
       if (i<1) break;
       hash->update(&ctx, libbuf, i);
   }
@@ -90,7 +90,7 @@ static const unsigned md5nofloat[64] = {
 #else
 #define md5nofloat 0
 #endif
-static unsigned long long sha512nofloat[80] = {
+static const unsigned long long sha512nofloat[80] = {
   // we cannot calculate these 64-bit values using the readily
   // available floating point data types and math functions,
   // so we always use this lookup table (80 * 8 bytes)
@@ -328,7 +328,7 @@ void hash_by_name(int fd, char *name, char *result)
   } else if (name[3] == '2') { // sha224, sha256
     hash->rconsttable32 = xmalloc(64*4);
     for (i=0; i<64; i++) hash->rconsttable32[i] = sha512nofloat[i] >> 32;
-  } else hash->rconsttable64 = sha512nofloat; // sha384, sha512
+  } else hash->rconsttable64 = (void *)sha512nofloat; // sha384, sha512
 
   // select hash type
   transform = (void *[]){md5_transform, sha1_transform, sha2_32_transform,
@@ -356,7 +356,7 @@ void hash_by_name(int fd, char *name, char *result)
 
   hash->count = 0;
   for (;;) {
-    i = read(fd, libbuf, sizeof(libbuf));
+    i = read(fd, libbuf, TOYBUF_SIZE);
     if (i<1) break;
     hash_update(libbuf, i, transform, chunksize, hash);
   }
@@ -388,7 +388,7 @@ void hash_by_name(int fd, char *name, char *result)
   // Wipe variables. Cryptographer paranoia. Avoid "optimizing" out memset
   // by looping on a volatile pointer.
   for (pp = (void *)hash; pp-(unsigned *)hash<sizeof(*hash)/4; pp++) *pp = 0;
-  for (pp = (void *)libbuf; pp-(unsigned *)libbuf<sizeof(libbuf)/4; pp++)
+  for (pp = (void *)libbuf; pp-(unsigned *)libbuf<TOYBUF_SIZE/4; pp++)
     *pp = 0;
 }
 #endif

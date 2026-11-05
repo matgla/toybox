@@ -52,7 +52,7 @@ static void do_split(int infd, char *in)
 
     // Refill toybuf?
     if (len == pos) {
-      if (!(len = xread(infd, toybuf, sizeof(toybuf)))) break;
+      if (!(len = xread(infd, toybuf, TOYBUF_SIZE))) break;
       pos = 0;
     }
 

@@ -422,6 +422,8 @@ GLOBALS(
   int hfd, pid, bangpid, recursion;
   struct double_list *nextsig;
   jmp_buf forkchild;
+  // A vfork child's PATH lookup and _=: see sh_exec().
+  char *exec_buf;
 
   // Callable function array
   struct sh_function {
@@ -1584,7 +1586,7 @@ if (DEBUG) { dprintf(2, "%d run_subshell %.*s\n", getpid(), len, str); debug_sho
     struct sh_fcall *ff;
 
     // open pipe to child
-    if (pipe(pipes) || 254 != dup2(pipes[0], 254)) return 1;
+    if (pipe(pipes) || 254 != dup2(pipes[0], 254)) return -1;
     close(pipes[0]);
     fcntl(pipes[1], F_SETFD, FD_CLOEXEC);
 
@@ -1595,11 +1597,20 @@ if (DEBUG) { dprintf(2, "%d run_subshell %.*s\n", getpid(), len, str); debug_sho
     environ[1] = xmalloc(32);
     environ[2] = xmalloc(32);
     pid = xpopen_setup(0, 0, subshell_callback);
-// TODO what if pid -1? Handle process exhaustion.
     free(environ[1]);
     free(environ[2]);
     free(environ);
     environ = oldenv;
+
+    // Out of processes: the caller reports it, and nothing reads the pipe.
+    if (pid == -1) {
+      perror_msg("vfork");
+      close(254);
+      close(pipes[1]);
+      if (!str) free(ss);
+
+      return -1;
+    }
 
     // marshall context to child
     close(254);
@@ -3129,6 +3140,20 @@ static char *resolve_path_noalloc(char *pathvar, char *name, char *buf,
 
 // Build environ from shell vars into caller-provided stack arrays (no malloc).
 // Returns envp count. underscore_slot is set to the slot for _= var.
+// How many environ slots build_environ_noalloc() can fill, with room for _= and the end.
+static int environ_slots_noalloc(void)
+{
+  struct sh_fcall *ff;
+  unsigned count = 2;
+
+  for (ff = TT.ff; ; ff = ff->next) {
+    if (ff->vars) count += ff->varslen;
+    if (ff->next == TT.ff) break;
+  }
+
+  return count > 512 ? 512 : count;
+}
+
 static int build_environ_noalloc(char **envbuf, int envmax, int *underscore_slot)
 {
   struct sh_fcall *ff;
@@ -3162,77 +3187,95 @@ static int build_environ_noalloc(char **envbuf, int envmax, int *underscore_slot
 }
 
 // Call binary, or run script via xexec("sh --")
+#define SH_EXEC_PATH_MAX 256
+#define SH_EXEC_US_MAX 272 // "_=" + path
+// A vfork child, on its parent's stack, which the kernel then loads the program on:
+// a frame of its own holding only what this path uses.
+// avoid all malloc to prevent corrupting parent's heap.
+// Use stack buffers for PATH resolution and environ building.
+__attribute__((noinline)) static void sh_exec_vfork(char **argv)
+{
+  char *pp = getvar("PATH") ? : _PATH_DEFPATH, *ss = TT.isexec ? : *argv;
+
+  if (getpid() != TT.pid) signify(SIGINT, 0); // TODO: restore all?
+
+  // Allocated by the parent in sh_main(), which is suspended meanwhile and stays
+  // out of it: this runs on its stack, which a load then goes much deeper on.
+  char *pathbuf = TT.exec_buf, *underscoreBuf = TT.exec_buf+SH_EXEC_PATH_MAX;
+  int env_slots = environ_slots_noalloc(), envc, uscore_slot;
+  char *envbuf[env_slots]; // the vfork child shares the parent's stack: use what it needs
+  char *resolved = ss;
+
+  errno = ENOENT;
+  if (strchr(ss, '/')) {
+    if (access(ss, X_OK)) resolved = 0;
+  } else {
+    resolved = resolve_path_noalloc(pp, ss, pathbuf, SH_EXEC_PATH_MAX);
+  }
+
+  if (resolved) {
+    envc = build_environ_noalloc(envbuf, env_slots, &uscore_slot);
+
+    // Build _=<path> on stack
+    int rlen = strlen(resolved);
+    if (rlen+3 <= SH_EXEC_US_MAX) {
+      underscoreBuf[0] = '_';
+      underscoreBuf[1] = '=';
+      memcpy(underscoreBuf+2, resolved, rlen+1);
+      if (uscore_slot >= 0) {
+        envbuf[uscore_slot] = underscoreBuf;
+      } else if (envc < env_slots-1) {
+        envbuf[envc++] = underscoreBuf;
+        envbuf[envc] = 0;
+      }
+    }
+
+    // Don't leave open filehandles to scripts in children. Close only the
+    // descriptor: fclose() would free the FILE in memory the parent shares.
+    if (!TT.isexec) {
+      struct sh_fcall *ff;
+      for (ff = TT.ff; ff!=TT.ff->prev; ff = ff->next)
+        if (ff->source) close(fileno(ff->source));
+    }
+
+    execve(resolved, argv, envbuf);
+
+    // shell script without #! — use stack array
+    if (errno == ENOEXEC) {
+      unsigned argc;
+      for (argc = 0; argv[argc]; argc++);
+      if (argc+3 < 512) {
+        char *argv2_stack[argc+4];
+        memcpy(argv2_stack+3, argv+1, argc*sizeof(char *));
+        argv2_stack[0] = "sh";
+        argv2_stack[1] = "--";
+        argv2_stack[2] = resolved;
+        execvp(argv2_stack[0], argv2_stack);
+      }
+    }
+  }
+
+  perror_msg("%s", *argv);
+  _exit(127);
+}
+
+static void sh_exec_other(char **argv);
+
 static void sh_exec(char **argv)
+{
+  if (!CFG_TOYBOX_FORK && !toys.stacktop) sh_exec_vfork(argv);
+  else sh_exec_other(argv);
+}
+
+__attribute__((noinline)) static void sh_exec_other(char **argv)
 {
   char *pp = getvar("PATH") ? : _PATH_DEFPATH, *ss = TT.isexec ? : *argv,
     **sss = 0, **oldenv = environ, **argv2;
   int norecurse = CFG_TOYBOX_NORECURSE || !toys.stacktop || TT.isexec;
   struct string_list *sl = 0;
-  struct toy_list *tl = 0;
+  struct toy_entry *tl = 0;
 
   if (getpid() != TT.pid) signify(SIGINT, 0); // TODO: restore all?
-
-  // vfork child: avoid all malloc to prevent corrupting parent's heap.
-  // Use stack buffers for PATH resolution and environ building.
-  if (!CFG_TOYBOX_FORK && !toys.stacktop) {
-    char pathbuf[256];
-    char underscoreBuf[272]; // "_=" + pathbuf
-    char *envbuf[512];
-    int envc, uscore_slot;
-    char *resolved = ss;
-
-    errno = ENOENT;
-    if (strchr(ss, '/')) {
-      if (access(ss, X_OK)) resolved = 0;
-    } else {
-      resolved = resolve_path_noalloc(pp, ss, pathbuf, sizeof(pathbuf));
-    }
-
-    if (resolved) {
-      envc = build_environ_noalloc(envbuf, 512, &uscore_slot);
-
-      // Build _=<path> on stack
-      int rlen = strlen(resolved);
-      if (rlen+3 <= (int)sizeof(underscoreBuf)) {
-        underscoreBuf[0] = '_';
-        underscoreBuf[1] = '=';
-        memcpy(underscoreBuf+2, resolved, rlen+1);
-        if (uscore_slot >= 0) {
-          envbuf[uscore_slot] = underscoreBuf;
-        } else if (envc < 511) {
-          envbuf[envc++] = underscoreBuf;
-          envbuf[envc] = 0;
-        }
-      }
-
-      // Don't leave open filehandles to scripts in children. Close only the
-      // descriptor: fclose() would free the FILE in memory the parent shares.
-      if (!TT.isexec) {
-        struct sh_fcall *ff;
-        for (ff = TT.ff; ff!=TT.ff->prev; ff = ff->next)
-          if (ff->source) close(fileno(ff->source));
-      }
-
-      execve(resolved, argv, envbuf);
-
-      // shell script without #! — use stack array
-      if (errno == ENOEXEC) {
-        unsigned argc;
-        for (argc = 0; argv[argc]; argc++);
-        if (argc+3 < 512) {
-          char *argv2_stack[512];
-          memcpy(argv2_stack+3, argv+1, argc*sizeof(char *));
-          argv2_stack[0] = "sh";
-          argv2_stack[1] = "--";
-          argv2_stack[2] = resolved;
-          execvp(argv2_stack[0], argv2_stack);
-        }
-      }
-    }
-
-    perror_msg("%s", *argv);
-    _exit(127);
-  }
 
   errno = ENOENT;
   if (strchr(ss, '/')) {
@@ -3297,13 +3340,46 @@ static void sh_exec(char **argv)
 // Execute a single command at TT.ff->pl returning new sh_process instance.
 // background is set when the caller ends this pipeline with "&", which decides
 // whether a builtin that could go either way has to become a real process.
+// Out of line for the stack: temp and rebound are only for a builtin, and the path
+// that vforks and execs runs on this stack as well.
+__attribute__((noinline)) static void run_builtin(struct sh_process *pp, struct toy_entry *tl)
+{
+  int jj;
+  sigjmp_buf rebound, *prebound = toys.rebound;
+  jj = offsetof(struct toy_context, rebound);
+  char temp[256];
+
+  // This fakes lots of what toybox_main() does.
+  memcpy(&temp, &toys, jj);
+  memset(&toys, 0, jj);
+
+  // The compiler complains "declaration does not declare anything" if we
+  // name the union in TT, it only works WITHOUT a name. So we can't
+  // sizeof(union) instead offsetof() first thing after union to get size.
+  memset(&TT, 0, offsetof(struct sh_data, SECONDS));
+  if (!sigsetjmp(rebound, 1)) {
+    toys.rebound = &rebound;
+if (DEBUG) { dprintf(2, "%d builtin", getpid()); for (int xx = 0; xx<=pp->arg.c; xx++) dprintf(2, " \"%s\"", pp->arg.v[xx]); dprintf(2, "\n"); }
+    toy_singleinit(tl, pp->arg.v);
+    toy_run(tl);
+    xexit();
+  }
+  toys.rebound = prebound;
+  pp->exit = toys.exitval;
+  clearerr(stdout);
+  if (toys.optargs != toys.argv+1) push_arg(&pp->delete, toys.optargs);
+  // only a TOYFLAG_UMASK command changed it behind the user's back
+  if ((tl->flags&TOYFLAG_UMASK) && toys.old_umask) umask(toys.old_umask);
+  memcpy(&toys, &temp, jj);
+}
+
 static struct sh_process *run_command(int local, int background)
 {
   char *s, *ss;
   struct sh_arg *arg = TT.ff->pl->arg, prefix = {0};
   int skiplen = 0, funk, ii, jj, piped = local;
   struct sh_process *pp = xzalloc(sizeof(*pp));
-  struct toy_list *tl0;
+  struct toy_entry *tl0;
 
   // Setup function and child process contexts
   // Create new function context after resolving variables (for shift)
@@ -3397,7 +3473,7 @@ static struct sh_process *run_command(int local, int background)
     // the | (or &) joining it to the next segment is the parent's business
     while (end>seg && strchr(" |&", end[-1])) end--;
     *end = 0;
-    if (1>(pp->pid = run_subshell(seg, -1))) pp->exit = 127;
+    if (1>(pp->pid = run_subshell(seg, -1))) pp->pid = 0, pp->exit = 127;
     free(seg);
   // call shell function
   } else if (funk != TT.funcslen) {
@@ -3408,7 +3484,7 @@ static struct sh_process *run_command(int local, int background)
     TT.ff->_ = pp->arg.v[pp->arg.c-1];
   // call command from $PATH or toybox builtin
   } else {
-    struct toy_list *tl = toy_find(*pp->arg.v);
+    struct toy_entry *tl = toy_find(*pp->arg.v);
 
     jj = tl ? tl->flags : 0;
     TT.ff->_ = pp->arg.v[pp->arg.c-1];
@@ -3430,35 +3506,14 @@ if (DEBUG) { dprintf(2, "%d run command %p %s\n", getpid(), TT.ff, *pp->arg.v); 
     // (and not when piped: in-process it could fill the pipe before its
     // reader starts, see above)
     } else if ((jj&TOYFLAG_NOFORK) || (!background && !piped && (jj&TOYFLAG_MAYFORK))) {
-      sigjmp_buf rebound, *prebound = toys.rebound;
-      jj = offsetof(struct toy_context, rebound);
-      char temp[256];
-
-      // This fakes lots of what toybox_main() does.
-      memcpy(&temp, &toys, jj);
-      memset(&toys, 0, jj);
-
-      // The compiler complains "declaration does not declare anything" if we
-      // name the union in TT, it only works WITHOUT a name. So we can't
-      // sizeof(union) instead offsetof() first thing after union to get size.
-      memset(&TT, 0, offsetof(struct sh_data, SECONDS));
-      if (!sigsetjmp(rebound, 1)) {
-        toys.rebound = &rebound;
-if (DEBUG) { dprintf(2, "%d builtin", getpid()); for (int xx = 0; xx<=pp->arg.c; xx++) dprintf(2, " \"%s\"", pp->arg.v[xx]); dprintf(2, "\n"); }
-        toy_singleinit(tl, pp->arg.v);
-        tl->toy_main();
-        xexit();
-      }
-      toys.rebound = prebound;
-      pp->exit = toys.exitval;
-      clearerr(stdout);
-      if (toys.optargs != toys.argv+1) push_arg(&pp->delete, toys.optargs);
-      // only a TOYFLAG_UMASK command changed it behind the user's back
-      if ((tl->flags&TOYFLAG_UMASK) && toys.old_umask) umask(toys.old_umask);
-      memcpy(&toys, &temp, jj);
+      run_builtin(pp, tl);
     // Run command in new child process
-    } else if (-1==(pp->pid = xpopen_setup(pp->arg.v, 0, sh_exec)))
-        perror_msg("%s: vfork", *pp->arg.v);
+    } else if (-1==(pp->pid = xpopen_setup(pp->arg.v, 0, sh_exec))) {
+      perror_msg("%s: vfork", *pp->arg.v);
+      // pid -1 would wait for any child
+      pp->pid = 0;
+      pp->exit = 127;
+    }
   }
 
 done:
@@ -3530,7 +3585,8 @@ static char *strglue(char **str, char *cut, char *add)
 // "line" is malloced memory which is consumed (and eventually freed).
 // call with NULL at EOF to flush (unfinished HERE doc for example)
 // Returns 0 finished, 1 need more input (> prompt), -1 for syntax err
-static int parse_line(char *line, struct double_list **expect)
+// Out of line for the stack: sh_loop() runs everything else under its frame.
+__attribute__((noinline)) static int parse_line(char *line, struct double_list **expect)
 {
   char *start = line, *end, *s, *ss, *ex, done = 0,
     *tails[] = {"fi", "done", "esac", "}", "]]", ")", 0};
@@ -4257,7 +4313,7 @@ static int do_prompt(char *prompt)
   int len, ll;
 
   if (!prompt) return 0;
-  while ((len = sizeof(toybuf)-(pp-toybuf))>0 && *prompt) {
+  while ((len = TOYBUF_SIZE-(pp-toybuf))>0 && *prompt) {
     c = *(prompt++);
 
     if (c=='!') {
@@ -4325,7 +4381,7 @@ static int do_prompt(char *prompt)
     } else *pp++ = c;
   }
   len = pp-toybuf;
-  if (len>=sizeof(toybuf)) len = sizeof(toybuf);
+  if (len>=TOYBUF_SIZE) len = TOYBUF_SIZE;
   writeall(2, toybuf, len);
 
   return len;
@@ -4809,6 +4865,8 @@ if (DEBUG) dprintf(2, "%d s=%s ss=%s ctl=%s type=%d pl=%p ff=%p\n", getpid(), (T
 
           continue;
         }
+        // Could not start it: the block fails, and pid -1 would wait for any child
+        if (pp->pid<0) pp->pid = 0, pp->exit = 127;
         TT.ff->pl = TT.ff->pl->end;
         pop_block();
         dlist_add_nomalloc((void *)&pplist, (void *)pp);
@@ -5020,7 +5078,14 @@ do_then:
         arg_add(&TT.jobs, (void *)pplist);
         TT.bangpid = pplist->prev->pid;
         if (dashi()) dprintf(2, "[%u] %u\n", pplist->job, TT.bangpid);
-      } else toys.exitval = wait_pipeline(pplist);
+      } else {
+        // The last stage's stdin is the pipe's read end, moved onto our own fd 0
+        // for it to inherit. Let go of it before waiting: a reader that leaves
+        // early otherwise leaves its writer blocked on a pipe we hold open, while
+        // we wait for that writer.
+        if (TT.ff->pl && !TT.ff->pl->type) unredirect(&TT.ff->blk->urd);
+        toys.exitval = wait_pipeline(pplist);
+      }
       pplist = 0;
     }
     if (!TT.ff || !TT.ff->pl) break;
@@ -5111,7 +5176,9 @@ FILE *fpathopen(char *name)
 }
 
 // On nommu we had to exec(), so parent environment is passed via a pipe.
-static void nommu_reentry(void)
+// Out of line for the stack: only sh_main calls it, and that frame stays for the
+// whole life of the shell.
+__attribute__((noinline)) static void nommu_reentry(void)
 {
   struct stat st;
   int ii, pid, ppid, len;
@@ -5170,7 +5237,9 @@ static void nommu_reentry(void)
 }
 
 // init locals, sanitize environment, handle nommu subshell handoff
-static void subshell_setup(void)
+// Out of line for the stack: only sh_main calls it, and that frame stays for the
+// whole life of the shell.
+__attribute__((noinline)) static void subshell_setup(void)
 {
   int ii, from, uid = getuid();
   struct passwd *pw = getpwuid(uid);
@@ -5195,7 +5264,7 @@ static void subshell_setup(void)
   initvardef("SHELL", pw->pw_shell, "/bin/sh");
   initvardef("USER", pw->pw_name, toybuf+1024);
   initvardef("LOGNAME", pw->pw_name, toybuf+1024);
-  gethostname(toybuf, sizeof(toybuf)-1);
+  gethostname(toybuf, TOYBUF_SIZE-1);
   initvar("HOSTNAME", toybuf);
   uname(&uu);
   initvar("HOSTTYPE", uu.machine);
@@ -5205,7 +5274,7 @@ static void subshell_setup(void)
   // sprintf(toybuf, "%s-toybox", TOYBOX_VERSION);
   // initvar("BASH_VERSION", toybuf); TODO
   initvar("OPTERR", "1"); // TODO: test if already exported?
-  if (readlink0("/proc/self/exe", s = toybuf, sizeof(toybuf))||(s=getenv("_")))
+  if (readlink0("/proc/self/exe", s = toybuf, TOYBUF_SIZE)||(s=getenv("_")))
     initvar("BASH", s);
   initvar("PS2", "> ");
   initvar("PS3", "#? ");
@@ -5356,11 +5425,13 @@ void sh_main(void)
 {
 if (DEBUG) { dprintf(2, "%d main", getpid()); for (unsigned uu = 0; toys.argv[uu]; uu++) dprintf(2, " %s", toys.argv[uu]); dprintf(2, "\n"); }
 
+  xvfork_may_fail = 1;
   signify(SIGPIPE, 0);
   TT.options = (toys.optflags&0xff)|OPT_B;
   TT.pid = getpid();
   TT.hfd = 10;
   srandom(TT.SECONDS = millitime());
+  TT.exec_buf = xmalloc(SH_EXEC_PATH_MAX+SH_EXEC_US_MAX);
 
   // TODO euid stuff?
   // TODO login shell?

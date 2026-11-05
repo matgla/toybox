@@ -208,14 +208,14 @@ void cpio_main(void)
 
       data = toybuf;
       while (size) {
-        if (size < sizeof(toybuf)) data = strpad(afd, size, 0);
-        else xreadall(afd, toybuf, sizeof(toybuf));
-        if (!test) xwrite(fd, data, data == toybuf ? sizeof(toybuf) : size);
+        if (size < TOYBUF_SIZE) data = strpad(afd, size, 0);
+        else xreadall(afd, toybuf, TOYBUF_SIZE);
+        if (!test) xwrite(fd, data, data == toybuf ? TOYBUF_SIZE : size);
         if (data != toybuf) {
           free(data);
           break;
         }
-        size -= sizeof(toybuf);
+        size -= TOYBUF_SIZE;
       }
 
       if (!test) {
@@ -301,7 +301,7 @@ void cpio_main(void)
         // Write out body for symlink or regular file
         if (link) xwrite(afd, link, st.st_size);
         else for (llen = st.st_size; llen; llen -= nlen) {
-          nlen = llen > sizeof(toybuf) ? sizeof(toybuf) : llen;
+          nlen = llen > TOYBUF_SIZE ? TOYBUF_SIZE : llen;
           // If read fails, write anyway (already wrote size in header)
           if (nlen != readall(fd, toybuf, nlen))
             if (!error++) perror_msg("bad read from file '%s'", name);

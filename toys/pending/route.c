@@ -304,7 +304,7 @@ static void setroute(sa_family_t f, char **argv)
 
       if (!strcmp(*argv, "metric")) {
         unsigned int priority = atolx_range(argv[1], 0, UINT_MAX);
-        addAttr(nlMsg, sizeof(toybuf), &priority, RTA_PRIORITY, 4);
+        addAttr(nlMsg, TOYBUF_SIZE, &priority, RTA_PRIORITY, 4);
       } else if (!strcmp(*argv, "netmask")) {
         uint32_t netmask;
         char *ptr;
@@ -327,7 +327,7 @@ static void setroute(sa_family_t f, char **argv)
         rtMsg->rtm_dst_len = netmask;
       } else if (!strcmp(*argv, "gw")) {
         if (!inet_pton(f, argv[1], &addr)) error_exit("invalid gw");
-        addAttr(nlMsg, sizeof(toybuf), &addr, RTA_GATEWAY, addr_len);
+        addAttr(nlMsg, TOYBUF_SIZE, &addr, RTA_GATEWAY, addr_len);
       } else if (!strcmp(*argv, "mss")) {
         // TODO(emolitor): Add RTA_METRICS support
         //set the TCP Maximum Segment Size for connections over this route.
@@ -345,7 +345,7 @@ static void setroute(sa_family_t f, char **argv)
       } else if (!strcmp(*argv, "dev")) {
         unsigned int if_idx = if_nametoindex(argv[1]);
         if (!if_idx) perror_exit("dev");
-        addAttr(nlMsg, sizeof(toybuf), &if_idx, RTA_OIF, sizeof(unsigned int));
+        addAttr(nlMsg, TOYBUF_SIZE, &if_idx, RTA_OIF, sizeof(unsigned int));
       } else help_exit("no '%s'", *argv);
       argv++;
     }
@@ -356,7 +356,7 @@ static void setroute(sa_family_t f, char **argv)
 
     if (prefix) rtMsg->rtm_dst_len = strtoul(prefix, &prefix, 0);
     if (!inet_pton(f, strtok(tgtip, "/"), &addr)) error_exit("invalid target");
-    addAttr(nlMsg, sizeof(toybuf), &addr, RTA_DST, addr_len);
+    addAttr(nlMsg, TOYBUF_SIZE, &addr, RTA_DST, addr_len);
   } else rtMsg->rtm_dst_len = 0;
 
   xsend(sockfd, nlMsg, nlMsg->nlmsg_len);

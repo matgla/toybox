@@ -93,7 +93,7 @@ void vmstat_main(void)
   if (toys.optc) loop_delay = atolx_range(toys.optargs[0], 0, INT_MAX);
   if (toys.optc>1) loop_max = atolx_range(toys.optargs[1], 1, INT_MAX);
 
-  xreadfile("/proc/uptime", toybuf, sizeof(toybuf));
+  xreadfile("/proc/uptime", toybuf, TOYBUF_SIZE);
   sscanf(toybuf, "%*s %llu", &units);
 
   for (loop = 0; !loop_max || loop<loop_max; loop++) {

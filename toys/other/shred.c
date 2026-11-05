@@ -71,7 +71,7 @@ void shred_main(void)
       if (pos >= len) {
         pos = -1;
         if (++iter == TT.n && FLAG(z)) {
-          memset(toybuf, 0, sizeof(toybuf));
+          memset(toybuf, 0, TOYBUF_SIZE);
           continue;
         }
         if (iter >= TT.n) break;
@@ -87,7 +87,7 @@ void shred_main(void)
 
       // Determine length, read random data if not zeroing, write.
 
-      throw = sizeof(toybuf);
+      throw = TOYBUF_SIZE;
       if (FLAG(x) && len-pos < throw) throw = len-pos;
 
       if (iter != TT.n) xgetrandom(toybuf, throw);

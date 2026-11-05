@@ -2660,7 +2660,7 @@ static void do_xzcat(int fd, char *name)
   toys.rebound = &jmp;
   if (!sigsetjmp(jmp, 0)) for (;;) {
     if (b.in_pos == b.in_size) {
-      b.in_size = xread(fd, b.in, sizeof(toybuf));
+      b.in_size = xread(fd, b.in, TOYBUF_SIZE);
       b.in_pos = 0;
     }
 

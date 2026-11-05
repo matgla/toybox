@@ -274,7 +274,7 @@ static int cp_node(struct dirtree *try)
       {
         // make symlink, or make block/char/fifo/socket
         if (S_ISLNK(try->st.st_mode)
-            ? readlinkat0(tfd, try->name, toybuf, sizeof(toybuf)) &&
+            ? readlinkat0(tfd, try->name, toybuf, TOYBUF_SIZE) &&
               (!unlinkat(cfd, catch, 0) || ENOENT == errno) &&
               !symlinkat(toybuf, cfd, catch)
             : !mknodat(cfd, catch, try->st.st_mode, try->st.st_rdev))

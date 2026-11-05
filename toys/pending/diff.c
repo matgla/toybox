@@ -369,7 +369,7 @@ static int *diff(char **files)
     }
   }
 
-  s = sizeof(toybuf)/2;
+  s = TOYBUF_SIZE/2;
   bufi = toybuf;
   bufj = toybuf+s;
 

@@ -72,7 +72,7 @@ void oneit_main(void)
 
   // Autodetect console from sysfs if no -c
   memcpy(toybuf, "/dev/", 5);
-  i = sizeof(toybuf)-6;
+  i = TOYBUF_SIZE-6;
   if (!TT.c && (TT.c = readfile("/sys/class/tty/console/active", ss, i))) {
     // Take last entry, remove newline terminator
     while (TT.c[i = strcspn(TT.c, " \n")]) {

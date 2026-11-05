@@ -70,7 +70,7 @@ static void do_sha3sum(int fd, char *name)
   for (len = 0;; ss += rate) {
     if ((span = len-(ss-toybuf))<rate) {
       memcpy(toybuf, ss, span);
-      len = span += readall(fd, (ss = toybuf)+span, sizeof(toybuf)-span);
+      len = span += readall(fd, (ss = toybuf)+span, TOYBUF_SIZE-span);
     }
     if (span>rate) span = rate;
     for (ii = 0; ii<span; ii++) buf[ii] ^= ss[ii];

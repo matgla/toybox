@@ -116,7 +116,7 @@ void ulimit_main(void) {
 
           if (FLAG(H)) {
             ok = !!readfile("/proc/sys/fs/pipe-max-size", toybuf,
-                            sizeof(toybuf));
+                            TOYBUF_SIZE);
           } else {
             int pp[2];
 

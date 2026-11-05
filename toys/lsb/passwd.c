@@ -110,7 +110,7 @@ void passwd_main(void)
     name, encrypted, 1)) error_msg("Failure");
   else fprintf(stderr, "Success\n");
 
-  memset(toybuf, 0, sizeof(toybuf));
+  memset(toybuf, 0, TOYBUF_SIZE);
   memset(encrypted, 0, strlen(encrypted));
   free(encrypted);
 }

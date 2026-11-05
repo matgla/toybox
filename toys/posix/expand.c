@@ -36,7 +36,7 @@ static void do_expand(int fd, char *name)
   int i, len, x=0, stop = 0;
 
   for (;;) {
-    len = readall(fd, toybuf, sizeof(toybuf));
+    len = readall(fd, toybuf, TOYBUF_SIZE);
     if (len<0) {
       perror_msg_raw(name);
       return;
@@ -96,7 +96,7 @@ static int parse_tablist(unsigned *tablist)
       int count;
       unsigned x, *t = tablist ? tablist+tabcount : &x;
 
-      if (tabcount >= sizeof(toybuf)/sizeof(unsigned)) break;
+      if (tabcount >= TOYBUF_SIZE/sizeof(unsigned)) break;
       if (sscanf(s, "%u%n", t, &count) != 1) break;
       if (tabcount++ && tablist && *(t-1) >= *t) break;
       s += count;

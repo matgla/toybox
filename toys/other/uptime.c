@@ -39,7 +39,7 @@ void uptime_main(void)
   if (FLAG(s)) {
     t -= info.uptime;
     tm = localtime(&t);
-    strftime(toybuf, sizeof(toybuf), "%F %T", tm);
+    strftime(toybuf, TOYBUF_SIZE, "%F %T", tm);
     xputs(toybuf);
     return;
   }

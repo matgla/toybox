@@ -420,6 +420,7 @@ void names_to_pid(char **names, int (*callback)(pid_t pid, char *name),
 
 pid_t __attribute__((returns_twice)) xvforkwrap(pid_t pid);
 #define XVFORK() xvforkwrap(vfork())
+extern int xvfork_may_fail;
 
 // Wrapper to make xfuncs() return (via siglongjmp) instead of exiting.
 // Assigns true/false "did it exit" value to first argument.

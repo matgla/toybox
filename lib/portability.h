@@ -357,6 +357,14 @@ int xnotify_wait(struct xnotify *not, char **path);
 int sig_to_num(char *s);
 char *num_to_sig(int sig);
 
+// A const table of strings otherwise needs a per-process copy to relocate.  With
+// this its pointers are offsets into the shared read-only data (see tinycc).
+#ifdef __TINYC__
+#define ROREL __rodata_relative
+#else
+#define ROREL
+#endif
+
 struct signame {
   int num;
   char *name;

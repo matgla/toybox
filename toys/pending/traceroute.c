@@ -245,7 +245,7 @@ static void do_trace()
           socklen_t addrlen = sizeof(struct sockaddr_storage);
           int rcv_len, icmp_res = 0;
 
-          rcv_len = recvfrom(TT.recv_sock, toybuf, sizeof(toybuf),
+          rcv_len = recvfrom(TT.recv_sock, toybuf, TOYBUF_SIZE,
               MSG_DONTWAIT, (struct sockaddr *) &from, &addrlen);
           if (rcv_len <= 0) continue;
 

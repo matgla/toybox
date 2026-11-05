@@ -81,7 +81,7 @@ static void do_id(char *username)
   uid_t uid = getuid(), euid = geteuid();
   gid_t gid = getgid(), egid = getegid();
   gid_t *groups = (gid_t *)toybuf;
-  int i = sizeof(toybuf)/sizeof(gid_t), ngroups;
+  int i = TOYBUF_SIZE/sizeof(gid_t), ngroups;
 
   // check if a username is given
   if (username) {

@@ -214,9 +214,16 @@ void xvdaemon(void)
 // share a stack, so child returning from a function would stomp the return
 // address parent would need. Solution: make vfork() an argument so processes
 // diverge before function gets called.
+int xvfork_may_fail;
+
 pid_t __attribute__((returns_twice)) xvforkwrap(pid_t pid)
 {
-  if (pid == -1) perror_exit("vfork");
+  // A shell outlives one command it could not start: it may be pid 1, and when
+  // that exits the whole system goes down.
+  if (pid == -1) {
+    if (!xvfork_may_fail) perror_exit("vfork");
+    return -1;
+  }
 
   // Signal to xexec() and friends that we vforked so can't recurse
   if (!pid) toys.stacktop = 0;
@@ -296,7 +303,7 @@ pid_t xpopen_setup(char **argv, int *pipes, void (*callback)(char **argv))
     if (CFG_TOYBOX_FORK) {
       toy_init(toys.which, toys.argv);
       toys.stacktop = 0;
-      toys.which->toy_main();
+      toy_run(toys.which);
       xexit();
     // In vfork() case, exec /proc/self/exe with high bit of first letter set
     // to tell main() we reentered.
@@ -394,10 +401,10 @@ char *xrunread(char *argv[], char *to_stdin)
   if (to_stdin && *to_stdin) writeall(*pipe, to_stdin, strlen(to_stdin));
   close(*pipe);
   for (;;) {
-    if (0>=(len = readall(pipe[1], libbuf, sizeof(libbuf)))) break;
+    if (0>=(len = readall(pipe[1], libbuf, TOYBUF_SIZE))) break;
     memcpy((result = xrealloc(result, 1+total+len))+total, libbuf, len);
     total += len;
-    if (len != sizeof(libbuf)) break;
+    if (len != TOYBUF_SIZE) break;
   }
   if (result) result[total] = 0;
   close(pipe[1]);
@@ -631,7 +638,7 @@ char *xabspath(char *path, int flags)
 
     // Is this a symlink?
     if (flags & (ABS_KEEP<<!todo)) len = 0, errno = EINVAL;
-    else len = readlinkat(dirfd, str, libbuf, sizeof(libbuf));
+    else len = readlinkat(dirfd, str, libbuf, TOYBUF_SIZE);
     if (len>4095) goto error;
 
     // Not a symlink: add to linked list, move dirfd, fail if error
@@ -881,9 +888,9 @@ void xsendfile_pad(int in, int out, long long len)
   len -= xsendfile_len(in, out, len);
   if (len) {
     perror_msg("short read");
-    memset(libbuf, 0, sizeof(libbuf));
+    memset(libbuf, 0, TOYBUF_SIZE);
     while (len) {
-      int i = len>sizeof(libbuf) ? sizeof(libbuf) : len;
+      int i = len>TOYBUF_SIZE ? TOYBUF_SIZE : len;
 
       xwrite(out, libbuf, i);
       len -= i;
@@ -971,7 +978,7 @@ void xregcomp(regex_t *preg, char *regex, int cflags)
   }
 
   if ((rc = regcomp(preg, regex, cflags))) {
-    regerror(rc, preg, libbuf, sizeof(libbuf));
+    regerror(rc, preg, libbuf, TOYBUF_SIZE);
     error_exit("bad regex '%s': %s", regex, libbuf);
   }
 }

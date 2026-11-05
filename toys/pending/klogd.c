@@ -73,7 +73,7 @@ void klogd_main(void)
 
   for (;;) {
     start = toybuf + used; //start updated for re-read.
-    size = sizeof(toybuf)-used-1;
+    size = TOYBUF_SIZE-used-1;
     if (FLAG(s)) size = klogctl(2, start, size);
     else size = xread(TT.fd, start, size);
     if (size < 0) perror_exit("error reading file:");
@@ -83,7 +83,7 @@ void klogd_main(void)
       if ((line_start = strsep(&start, "\n")) && start) used = 0;
       else {      //Incomplete line, copy it to start of buf
         used = stpcpy(toybuf, line_start)-toybuf;
-        if (used < (sizeof(toybuf) - 1)) break;
+        if (used < (TOYBUF_SIZE - 1)) break;
         used = 0; //we have buffer full, log it as it is.
       }
       prio = LOG_INFO;  //we dont know priority, mark it INFO

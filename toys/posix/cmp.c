@@ -33,7 +33,7 @@ GLOBALS(
 // We hijack loopfiles() to open and understand the "-" filename for us.
 static void do_cmp(int fd, char *name)
 {
-  int i, len1, len2, min_len, size = sizeof(toybuf)/2;
+  int i, len1, len2, min_len, size = TOYBUF_SIZE/2;
   long long byte_no = 1, line_no = 1;
   char *buf2 = toybuf+size;
 

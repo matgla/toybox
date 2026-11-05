@@ -51,7 +51,7 @@ static void handle_esc(void)
 
     // TODO: share code with hexedit's prompt() and vi's ex mode.
     // TODO: tab completion!
-    memset(toybuf, 0, sizeof(toybuf));
+    memset(toybuf, 0, TOYBUF_SIZE);
     while (1) {
       xprintf("\r\e[2K\e[1mFilename: \e[0m%s", toybuf);
       if (read(0, &input, 1) <= 0 || input == CTRL('[')) {
@@ -61,7 +61,7 @@ static void handle_esc(void)
       if (input == '\r') break;
       if (input == 0x7f && len > 0) toybuf[--len] = 0;
       else if (input == CTRL('U')) while (len > 0) toybuf[--len] = 0;
-      else if (input >= ' ' && input <= 0x7f && len < sizeof(toybuf))
+      else if (input >= ' ' && input <= 0x7f && len < TOYBUF_SIZE)
         toybuf[len++] = input;
     }
     xputsn("\r\e[2K");
@@ -80,7 +80,7 @@ static void handle_esc(void)
     // so we're reading back these characters if they're being echoed, but
     // for my specific use case of pasting into `base64 -d -i > foo`, this
     // is a much more convenient UI.
-    while ((len = read(fd, toybuf, sizeof(toybuf))) > 0) {
+    while ((len = read(fd, toybuf, TOYBUF_SIZE)) > 0) {
       written += len;
       xprintf("\r\e[2KPasting '%s' %lld/%lld (%lld%%)...", filename, written,
         size, written*100/size);
@@ -123,7 +123,7 @@ void microcom_main(void)
 
     // Read from connection, write to stdout.
     if (fds[0].revents) {
-      if (0 < (i = read(TT.fd, toybuf, sizeof(toybuf)))) xwrite(0, toybuf, i);
+      if (0 < (i = read(TT.fd, toybuf, TOYBUF_SIZE))) xwrite(0, toybuf, i);
       else break;
     }
 

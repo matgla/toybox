@@ -43,7 +43,7 @@ static void do_head(int fd, char *name)
   }
 
   while (FLAG(c) ? bytes : lines) {
-    len = read(fd, toybuf, sizeof(toybuf));
+    len = read(fd, toybuf, TOYBUF_SIZE);
     if (len<0) perror_msg_raw(name);
     if (len<1) break;
 

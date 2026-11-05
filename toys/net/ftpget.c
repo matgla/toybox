@@ -81,7 +81,7 @@ static int ftp_line(char *cmd, char *arg, int must)
     if (FLAG(v)) fprintf(stderr, s, cmd, arg);
     dprintf(TT.fd, s, cmd, arg);
   }
-  xread2line(TT.fd, toybuf, sizeof(toybuf));
+  xread2line(TT.fd, toybuf, TOYBUF_SIZE);
   if (!sscanf(toybuf, "%d", &rc) || (must && rc != must))
     error_exit_raw(toybuf);
 

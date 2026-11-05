@@ -88,7 +88,7 @@ static void fill_flags(struct file_info *fi)
   long long pos;
   unsigned flags;
 
-  snprintf(toybuf, sizeof(toybuf), "/proc/%d/fdinfo/%s", fi->pi.pid, fi->fd);
+  snprintf(toybuf, TOYBUF_SIZE, "/proc/%d/fdinfo/%s", fi->pi.pid, fi->fd);
   if (!(fp = fopen(toybuf, "r"))) return;
 
   if (fscanf(fp, "pos: %lld flags: %o", &pos, &flags) == 2) {
@@ -305,11 +305,11 @@ static void visit_symlink(struct proc_info *pi, char *name, char *path)
   // Get NAME.
   if (name) { // "/proc/pid/[cwd]".
     snprintf(fi->fd, sizeof(fi->fd), "%s", name);
-    snprintf(toybuf, sizeof(toybuf), "/proc/%d/%s", pi->pid, path);
+    snprintf(toybuf, TOYBUF_SIZE, "/proc/%d/%s", pi->pid, path);
   } else { // "/proc/pid/fd/[3]"
     snprintf(fi->fd, sizeof(fi->fd), "%s", path);
     fill_flags(fi); // Clobbers toybuf.
-    snprintf(toybuf, sizeof(toybuf), "/proc/%d/fd/%s", pi->pid, path);
+    snprintf(toybuf, TOYBUF_SIZE, "/proc/%d/fd/%s", pi->pid, path);
   }
   // TODO: code called by fill_stat would be easier to write if we didn't
   // rely on toybuf being preserved here.
@@ -331,7 +331,7 @@ static void visit_maps(struct proc_info *pi)
   size_t line_length = 0;
   struct file_info *fi;
 
-  snprintf(toybuf, sizeof(toybuf), "/proc/%d/maps", pi->pid);
+  snprintf(toybuf, TOYBUF_SIZE, "/proc/%d/maps", pi->pid);
   fp = fopen(toybuf, "r");
   if (!fp) return;
 
@@ -359,7 +359,7 @@ static void visit_fds(struct proc_info *pi)
   DIR *dir;
   struct dirent *de;
 
-  snprintf(toybuf, sizeof(toybuf), "/proc/%d/fd", pi->pid);
+  snprintf(toybuf, TOYBUF_SIZE, "/proc/%d/fd", pi->pid);
   if (!(dir = opendir(toybuf))) {
     struct file_info *fi = new_file_info(pi, "NOFD");
 
@@ -385,7 +385,7 @@ static void lsof_pid(int pid, struct stat *st)
 
   // Skip nonexistent pids
   sprintf(toybuf, "/proc/%d/stat", pid);
-  if (!readfile(toybuf, toybuf, sizeof(toybuf)-1) || !(s = strchr(toybuf, '(')))
+  if (!readfile(toybuf, toybuf, TOYBUF_SIZE-1) || !(s = strchr(toybuf, '(')))
     return;
   memcpy(pi.cmd, s+1, sizeof(pi.cmd)-1);
   pi.cmd[sizeof(pi.cmd)-1] = 0;
@@ -393,7 +393,7 @@ static void lsof_pid(int pid, struct stat *st)
 
   // Get USER.
   if (!st) {
-    snprintf(toybuf, sizeof(toybuf), "/proc/%d", pid);
+    snprintf(toybuf, TOYBUF_SIZE, "/proc/%d", pid);
     if (stat(toybuf, st = &sb)) return;
   }
   pi.uid = st->st_uid;

@@ -175,7 +175,7 @@ static void mount_filesystem(char *dev, char *dir, char *type,
   if (strstart(&dev, "UUID=")) {
     char *s = chomp(xrunread((char *[]){"blkid", "-U", dev, 0}, 0));
 
-    if (s && *s && strlen(s)<sizeof(toybuf)) strcpy(dev = toybuf, s);
+    if (s && *s && strlen(s)<TOYBUF_SIZE) strcpy(dev = toybuf, s);
     else dev -= 5;
     free(s);
   } else if (strstart(&dev, "LABEL=")) {
@@ -184,7 +184,7 @@ static void mount_filesystem(char *dev, char *dir, char *type,
 #else
     char *s = chomp(xrunread((char *[]){"blkid", "-L", dev, 0}, 0));
 
-    if (s && *s && strlen(s)<sizeof(toybuf)) strcpy(dev = toybuf, s);
+    if (s && *s && strlen(s)<TOYBUF_SIZE) strcpy(dev = toybuf, s);
     else dev -= 6;
     free(s);
 #endif

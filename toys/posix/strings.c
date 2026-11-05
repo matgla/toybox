@@ -51,7 +51,7 @@ static void do_strings(int fd, char *filename)
 
   for (i = nread = 0; ;i++) {
     if (i >= nread) {
-      nread = read(fd, toybuf, sizeof(toybuf));
+      nread = read(fd, toybuf, TOYBUF_SIZE);
       i = 0;
       if (nread < 0) perror_msg_raw(filename);
       if (nread < 1) {

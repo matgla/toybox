@@ -64,7 +64,7 @@ static void do_base(int fd, char *name)
 
   for (;;) {
     // If no more data, flush buffer
-    if (!(len = xread(fd, buf, sizeof(toybuf)-128))) {
+    if (!(len = xread(fd, buf, TOYBUF_SIZE-128))) {
       if (!FLAG(d)) {
         if (bits) wraputchar(toybuf[out<<(TT.n-bits)], &x);
         while (TT.total&TT.align) wraputchar('=', &x);

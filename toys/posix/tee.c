@@ -59,7 +59,7 @@ void tee_main(void)
 
   // Read data from stdin, write to each output file.
   for (;;) {
-    if (1>(len = xread(0, toybuf, sizeof(toybuf)))) break;
+    if (1>(len = xread(0, toybuf, TOYBUF_SIZE))) break;
     for (fdl = TT.outputs; fdl;fdl = fdl->next)
       if (len != writeall(fdl->fd, toybuf, len)) toys.exitval = 1;
   }

@@ -212,7 +212,7 @@ static void do_regular_file(int fd, char *name)
 
   // zero through elf shnum, just in case
   memset(s, 0, 80);
-  if ((len = readall(fd, s, sizeof(toybuf)-8))<0) perror_msg_raw(name);
+  if ((len = readall(fd, s, TOYBUF_SIZE-8))<0) perror_msg_raw(name);
 
   if (!len) xputs("empty");
   // 45 bytes: https://www.muppetlabs.com/~breadbox/software/tiny/teensy.html
@@ -416,7 +416,7 @@ static void do_regular_file(int fd, char *name)
         s += 0x200 + ver_off;
       } else {
         if (lseek(fd, ver_off - len + 0x200, SEEK_CUR)<0 ||
-            (len = readall(fd, s, sizeof(toybuf)))<0)
+            (len = readall(fd, s, TOYBUF_SIZE))<0)
           return perror_msg_raw(name);
       }
       xprintf(", version %s\n", s);

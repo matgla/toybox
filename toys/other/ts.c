@@ -35,7 +35,7 @@ static long long millinow(void)
 
 void ts_main(void)
 {
-  char *line, *mm = toybuf+sizeof(toybuf)-8,
+  char *line, *mm = toybuf+TOYBUF_SIZE-8,
        *format = toys.optflags ? "%T" : "%b %d %T";
   long long start = millinow(), now, diff, rel = FLAG(i) || FLAG(s);
   struct tm *tm;
@@ -48,7 +48,7 @@ void ts_main(void)
     tt = diff/1000;
     tm = rel ? gmtime(&tt) : localtime(&tt);
     if (FLAG(i)) start = now;
-    strftime(toybuf, sizeof(toybuf)-16, *toys.optargs ? : format, tm);
+    strftime(toybuf, TOYBUF_SIZE-16, *toys.optargs ? : format, tm);
     xprintf("%s%s %s\n", toybuf, mm, line);
   }
 }

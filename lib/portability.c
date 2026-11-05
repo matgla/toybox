@@ -666,7 +666,7 @@ long long sendfile_len(int in, int out, long long bytes, long long *consumed)
         continue;
       }
     } else {
-      if (bytes<0 || len>sizeof(libbuf)) len = sizeof(libbuf);
+      if (bytes<0 || len>TOYBUF_SIZE) len = TOYBUF_SIZE;
       ww = len = read(in, libbuf, len);
     }
     if (len<1 && errno==EAGAIN) continue;

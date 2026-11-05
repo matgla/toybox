@@ -112,7 +112,7 @@ static void puts_time(char *fmt, struct tm *tm)
     // Do we have any regular work for strftime to do?
     out = toybuf;
     if (*fmt) {
-      if (!strftime(out, sizeof(toybuf)-12, fmt, tm))
+      if (!strftime(out, TOYBUF_SIZE-12, fmt, tm))
         perror_exit("bad format '%s'", fmt);
       out += strlen(out);
     }

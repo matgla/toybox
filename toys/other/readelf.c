@@ -89,7 +89,7 @@ static int fits(char *what, int n, unsigned long long off, unsigned long long si
 {
   if (off > TT.size || size > TT.size || off > TT.size-size) {
     if (n == -1) *toybuf = 0;
-    else snprintf(toybuf, sizeof(toybuf), " %d", n);
+    else snprintf(toybuf, TOYBUF_SIZE, " %d", n);
     printf("%s%s's offset %llu + size %llu > file size %llu\n",
       what, toybuf, off, size, TT.size);
     return 0;

@@ -76,7 +76,7 @@ static void write_chunk(void *ptr)
 static int try_lseek(int fd, long bytes, long lines)
 {
   struct line_list *list = 0, *temp;
-  int flag = 0, chunk = sizeof(toybuf);
+  int flag = 0, chunk = TOYBUF_SIZE;
   off_t pos = lseek(fd, 0, SEEK_END);
 
   // If lseek() doesn't work on this stream, return now.
@@ -171,7 +171,7 @@ static void tail_continue()
       }
     }
 
-    while ((len = read(fd, toybuf, sizeof(toybuf)))>0) {
+    while ((len = read(fd, toybuf, TOYBUF_SIZE))>0) {
       if (TT.file_no>1 && TT.last_fd != fd) {
         TT.last_fd = fd;
         xprintf("\n==> %s <==\n", path);
@@ -224,7 +224,7 @@ static void do_tail(int fd, char *name)
     // Read data until we run out, keep a trailing buffer
     for (;;) {
       // Read next page of data, appending to linked list in order
-      if (!(new = read_chunk(fd, sizeof(toybuf)))) break;
+      if (!(new = read_chunk(fd, TOYBUF_SIZE))) break;
       dlist_add_nomalloc((void *)&list, (void *)new);
 
       // If tracing bytes, add until we have enough, discarding overflow.
@@ -271,7 +271,7 @@ static void do_tail(int fd, char *name)
     int len, offset = 0;
 
     // Error while reading does not exit.  Error writing does.
-    len = read(fd, toybuf, sizeof(toybuf));
+    len = read(fd, toybuf, TOYBUF_SIZE);
     if (len<1) break;
     while (bytes > 1 || lines > 1) {
       bytes--;

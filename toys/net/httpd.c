@@ -103,11 +103,11 @@ void handle(int infd, int outfd)
 {
   FILE *fp = fdopen(infd, "r");
   char *s = xgetline(fp), *cut, *ss, *esc, *path, *word[3];
-  int i = sizeof(toybuf), fd;
+  int i = TOYBUF_SIZE, fd;
 
   if (!s) return;
 
-  if (!getsockname(0, (void *)&toybuf, &i)) {
+  if (!getsockname(0, (void *)toybuf, &i)) {
     if (FLAG(v))
       dprintf(2, "Hello %s\n%s\n", ntop((void *)toybuf), s);
   }

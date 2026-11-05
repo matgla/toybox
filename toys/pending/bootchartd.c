@@ -67,7 +67,7 @@ static int dump_proc_data(FILE *fp)
       char *ptr;
       ssize_t len;
 
-      if ((len = readall(fd, toybuf, sizeof(toybuf)-1)) < 0) {
+      if ((len = readall(fd, toybuf, TOYBUF_SIZE-1)) < 0) {
         xclose(fd);
         continue;
       }
@@ -177,18 +177,18 @@ static void stop_logging(char *tmp_dir, char *prog)
   gethostname(host_name, sizeof(host_name));
   time(&t);
   localtime_r(&t, &st);
-  memset(toybuf, 0, sizeof(toybuf));
-  strftime(toybuf, sizeof(toybuf), "%a %b %e %H:%M:%S %Z %Y", &st);
+  memset(toybuf, 0, TOYBUF_SIZE);
+  strftime(toybuf, TOYBUF_SIZE, "%a %b %e %H:%M:%S %Z %Y", &st);
   fprintf(hdr_fp, "version = TBX_BCHARTD_VER 1.0.0\n");
   fprintf(hdr_fp, "title = Boot chart for %s (%s)\n", host_name, toybuf);
   if (uname(&uts) < 0) perror_exit("uname");
   fprintf(hdr_fp, "system.uname = %s %s %s %s\n", uts.sysname, uts.release,
       uts.version, uts.machine);
-  memset(toybuf, 0, sizeof(toybuf));
+  memset(toybuf, 0, TOYBUF_SIZE);
   if ((kcmd_line_fd = open("/proc/cmdline", O_RDONLY)) != -1) {
     ssize_t len;
 
-    if ((len = readall(kcmd_line_fd, toybuf, sizeof(toybuf)-1)) > 0) {
+    if ((len = readall(kcmd_line_fd, toybuf, TOYBUF_SIZE-1)) > 0) {
       toybuf[len] = 0;
       while (--len >= 0 && !toybuf[len]) continue;
       for (; len > 0; len--) if (toybuf[len] < ' ') toybuf[len] = ' ';
@@ -197,8 +197,8 @@ static void stop_logging(char *tmp_dir, char *prog)
   fprintf(hdr_fp, "system.kernel.options = %s", toybuf);
   close(kcmd_line_fd);
   fclose(hdr_fp);
-  memset(toybuf, 0, sizeof(toybuf));
-  snprintf(toybuf, sizeof(toybuf), "tar -zcf /var/log/bootlog.tgz header %s *.log",
+  memset(toybuf, 0, TOYBUF_SIZE);
+  snprintf(toybuf, TOYBUF_SIZE, "tar -zcf /var/log/bootlog.tgz header %s *.log",
       TT.proc_accounting ? "kernel_procs_acct" : "");
   system(toybuf);
 
@@ -245,7 +245,7 @@ void bootchartd_main()
   if (!parse_config_file("bootchartd.conf"))
     parse_config_file("/etc/bootchartd.conf");
 
-  memset(toybuf, 0, sizeof(toybuf));
+  memset(toybuf, 0, TOYBUF_SIZE);
   if (!(lgr_pid = xfork())) {
     char *tmp_dir = create_tmp_dir();
 

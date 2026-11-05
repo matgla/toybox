@@ -43,7 +43,7 @@ void hostname_main(void)
   char *hostname = toybuf, *dot;
   struct hostent *h;
 
-  gethostname(toybuf, sizeof(toybuf)-1);
+  gethostname(toybuf, TOYBUF_SIZE-1);
   if (TT.F && (hostname = xreadfile(TT.F, 0, 0))) {
     if (!*chomp(hostname)) {
       if (CFG_TOYBOX_FREE) free(hostname);
@@ -63,7 +63,7 @@ void hostname_main(void)
   if (FLAG(d) || FLAG(f)) {
     if (!(h = gethostbyname(toybuf)))
       error_exit("gethostbyname: %s", hstrerror(h_errno));
-    snprintf(toybuf, sizeof(toybuf), "%s", h->h_name);
+    snprintf(toybuf, TOYBUF_SIZE, "%s", h->h_name);
   }
   dot = toybuf+strcspn(toybuf, ".");
   if (FLAG(s)) *dot = 0;

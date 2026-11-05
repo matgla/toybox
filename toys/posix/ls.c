@@ -346,7 +346,7 @@ static void listfiles(int dirfd, struct dirtree *indir)
   struct dirtree *dt, **sort;
   unsigned long dtlen, ul = 0;
   unsigned width, totals[8], len[8], totpad = 0,
-    *colsizes = (unsigned *)toybuf, columns = sizeof(toybuf)/4;
+    *colsizes = (unsigned *)toybuf, columns = TOYBUF_SIZE/4;
   char tmp[64];
 
   if (-1 == dirfd) {

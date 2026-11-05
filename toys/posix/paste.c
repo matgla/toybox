@@ -113,7 +113,7 @@ static void do_paste(int fd, char *name)
   FILE **fps = (void *)toybuf;
 
   if (!(fps[TT.files++] = (fd ? fdopen(fd, "r") : stdin))) perror_exit(0);
-  if (TT.files >= sizeof(toybuf)/sizeof(FILE *)) perror_exit("tilt");
+  if (TT.files >= TOYBUF_SIZE/sizeof(FILE *)) perror_exit("tilt");
   if (FLAG(s)) {
     paste_files();
     xputc('\n');

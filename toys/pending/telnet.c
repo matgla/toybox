@@ -23,7 +23,7 @@ config TELNET
 
 GLOBALS(
   int sock;
-  char buf[2048]; // Half sizeof(toybuf) allows a buffer full of IACs.
+  char buf[2048]; // Half TOYBUF_SIZE allows a buffer full of IACs.
   struct termios old_term;
   struct termios raw_term;
   uint8_t mode;

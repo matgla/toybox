@@ -92,7 +92,7 @@ void timeout_main(void)
     }
     if (TT.pfd.revents&POLLIN) {
       errno = 0;
-      if (1>(ii = read(TT.fds[1], toybuf, sizeof(toybuf)))) {
+      if (1>(ii = read(TT.fds[1], toybuf, TOYBUF_SIZE))) {
         if (errno==EINTR) continue;
         break;
       }

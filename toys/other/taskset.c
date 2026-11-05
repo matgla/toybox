@@ -43,7 +43,7 @@ config TASKSET
 #define sched_getaffinity(pid, size, cpuset) \
   syscall(__NR_sched_getaffinity, (pid_t)pid, (size_t)size, (void *)cpuset)
 
-#define TOYBUF_BITS (8*sizeof(toybuf))
+#define TOYBUF_BITS (8*TOYBUF_SIZE)
 
 static int find_next_cpu(unsigned long *mask, int i)
 {
@@ -62,7 +62,7 @@ static void do_taskset(pid_t pid)
   // loop through twice to display before/after affinity masks
   for (i=0; ; i++) {
     if (FLAG(p) || !toys.optc) {
-      if (-1 == sched_getaffinity(pid, sizeof(toybuf), (void *)mask))
+      if (-1 == sched_getaffinity(pid, TOYBUF_SIZE, (void *)mask))
         perror_exit(failed, "get", pid);
 
       if (toys.optc)
@@ -99,7 +99,7 @@ static void do_taskset(pid_t pid)
         }
       } else {
         // Print as mask
-        for (j = sizeof(toybuf)/sizeof(long), k = 0; --j>=0;) {
+        for (j = TOYBUF_SIZE/sizeof(long), k = 0; --j>=0;) {
           if (k) printf("%0*lx", (int)(2*sizeof(long)), mask[j]);
           else if (mask[j]) {
             k++;
@@ -112,7 +112,7 @@ static void do_taskset(pid_t pid)
 
     if (i || toys.optc < 2) return;
 
-    memset(toybuf, 0, sizeof(toybuf));
+    memset(toybuf, 0, TOYBUF_SIZE);
     if (FLAG(c)) {
       // Convert cpu list to mask[] bits
       char* failed_cpu_list = "failed to parse CPU list: %s";
@@ -150,7 +150,7 @@ static void do_taskset(pid_t pid)
       } while (*s);
     } else {
       // Convert hex string to mask[] bits.
-      j = (k = strlen(s = *toys.optargs))-2*sizeof(toybuf);
+      j = (k = strlen(s = *toys.optargs))-2*TOYBUF_SIZE;
       if (j>0) {
         s += j;
         k -= j;
@@ -165,7 +165,7 @@ static void do_taskset(pid_t pid)
       }
     }
 
-    if (-1 == sched_setaffinity(pid, sizeof(toybuf), (void *)mask))
+    if (-1 == sched_setaffinity(pid, TOYBUF_SIZE, (void *)mask))
       perror_exit(failed, "set", pid);
   }
 }

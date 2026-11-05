@@ -1269,7 +1269,7 @@ static void init_compiler(void)
 
 //// Parsing and compiling to TT.zcode
 // Left binding powers
-static int lbp_table[] = {  // Must align with enum Toks
+static const int lbp_table[] = {  // Must align with enum Toks
   0, 0, 0, 0,     // tkunusedtoken, tkeof, tkerr, tknl,
   250, 250, 250,  // tkvar, tknumber, tkstring,
   250, 250, 250,  // tkregex, tkfunc, tkbuiltin,

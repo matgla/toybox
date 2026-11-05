@@ -165,7 +165,7 @@ static int i2cdetect_dash_l(struct dirtree *node)
 
   fname = dirtree_path(node, &suffix_len);
   strcat(fname, suffix);
-  xreadfile(fname, toybuf, sizeof(toybuf));
+  xreadfile(fname, toybuf, TOYBUF_SIZE);
   free(fname);
   if ((p = strchr(toybuf, '\n'))) *p = 0;
 

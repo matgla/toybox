@@ -48,7 +48,7 @@ static int acpi_callback(struct dirtree *tree)
 
   if (0<=(dfd = open((cpath = dirtree_path(tree, 0)), O_RDONLY))) {
     if ((fd = openat(dfd, "type", O_RDONLY)) < 0) goto done;
-    len = readall(fd, toybuf, sizeof(toybuf));
+    len = readall(fd, toybuf, TOYBUF_SIZE);
     close(fd);
     if (len<1) goto done;
 

@@ -255,7 +255,7 @@ void wget_main(void)
 
     // Read HTTP response into toybuf (probably with some body at end)
     for (index = toybuf;
-      (len = wget_read(index, sizeof(toybuf)-(index-toybuf)))>0; index += len);
+      (len = wget_read(index, TOYBUF_SIZE-(index-toybuf)))>0; index += len);
 
     // Split response into header and body, and null terminate header.
     // (RFC7230 says header cannot contain NUL.)
@@ -346,12 +346,12 @@ void wget_main(void)
         }
       }
 
-      if (len == sizeof(toybuf)) error_exit("chunk overflow");
+      if (len == TOYBUF_SIZE) error_exit("chunk overflow");
     } else {
       xwrite(fd, toybuf, len);
       len = 0;
     }
-  } while ((len += wget_read(toybuf + len, sizeof(toybuf) - len)) > 0);
+  } while ((len += wget_read(toybuf + len, TOYBUF_SIZE - len)) > 0);
 
   wget_close();
   free(TT.url);

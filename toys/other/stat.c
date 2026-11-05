@@ -68,7 +68,7 @@ static void strout(char *val)
 
 static void date_stat_format(struct timespec *ts)
 {
-  strout(format_iso_time(toybuf+128, sizeof(toybuf)-128, ts));
+  strout(format_iso_time(toybuf+128, TOYBUF_SIZE-128, ts));
 }
 
 static void print_stat(char type)
@@ -116,7 +116,7 @@ static void print_stat(char type)
   } else if (type == 'N') {
     printf("%s", TT.file);
     if (S_ISLNK(stat->st_mode))
-      if (readlink0(TT.file, toybuf, sizeof(toybuf)))
+      if (readlink0(TT.file, toybuf, TOYBUF_SIZE))
         printf(" -> '%s'", toybuf);
   } else if (type == 'o') out('u', stat->st_blksize);
   else if (type == 's') out('u', stat->st_size);

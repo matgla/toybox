@@ -75,7 +75,7 @@ static void do_wc(int fd, char *name)
   }
 
   for (;;) {
-    int pos, done = 0, len2 = read(fd, toybuf+len, sizeof(toybuf)-len);
+    int pos, done = 0, len2 = read(fd, toybuf+len, TOYBUF_SIZE-len);
     unsigned wchar;
 
     if (len2<0) perror_msg_raw(name);

@@ -44,7 +44,7 @@ static void do_xxd(int fd, char *name)
   FILE *fp = xfdopen(xdup(fd), "r");
   long long pos = 0;
   long long limit = TT.l;
-  int i, j, k, len, space, c = TT.c ? : sizeof(toybuf);
+  int i, j, k, len, space, c = TT.c ? : TOYBUF_SIZE;
 
   if (FLAG(s)) {
     if (fseek(fp, TT.s, SEEK_SET)) perror_exit("seek %ld", TT.s);
@@ -94,7 +94,7 @@ static void do_xxd_include(int fd, char *name)
 
   // The original xxd outputs a header/footer if given a filename (not stdin).
   // We don't, which means that unlike the original we can implement -ri.
-  while ((len = read(fd, toybuf, sizeof(toybuf))) > 0) {
+  while ((len = read(fd, toybuf, TOYBUF_SIZE)) > 0) {
     for (i = 0; i < len; ++i) {
       printf("%s%#.02x", c > 1 ? ", " : "  ", toybuf[i]);
       if (c++ == TT.c) {

@@ -138,7 +138,7 @@ static void out(const char *fmt, ...)
   char *prefix = " ";
 
   va_start(va, fmt);
-  len = vsnprintf(toybuf, sizeof(toybuf), fmt, va);
+  len = vsnprintf(toybuf, TOYBUF_SIZE, fmt, va);
   va_end(va);
 
   if (TT.output_cols == 0) {

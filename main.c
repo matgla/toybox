@@ -9,21 +9,51 @@
 
 #undef NEWTOY
 #undef OLDTOY
-#define NEWTOY(name, opts, flags) {#name, name##_main, OPTSTR_##name, flags},
-#define OLDTOY(name, oldname, flags) \
-  {#name, oldname##_main, OPTSTR_##oldname, flags},
+#define NEWTOY(name, opts, flags) {#name, OPTSTR_##name, flags},
+#define OLDTOY(name, oldname, flags) {#name, OPTSTR_##oldname, flags},
 
-struct toy_list toy_list[] = {
+const struct toy_entry toy_list_ro[] = {
 #include "generated/newtoys.h"
 };
+
+// A switch rather than a pointer in each entry: on YasOS a function pointer is
+// a per-process RAM thunk behind a per-process GOT slot, so a table of them
+// costs every process about 40 bytes per applet whichever one it runs.
+void toy_run(struct toy_entry *which)
+{
+  enum { TOY_RUN_BASE = __COUNTER__+1 };
+
+  switch (which-toy_list) {
+#undef NEWTOY
+#undef OLDTOY
+#define NEWTOY(name, opts, flags) case __COUNTER__-TOY_RUN_BASE: name##_main(); break;
+#define OLDTOY(name, oldname, flags) case __COUNTER__-TOY_RUN_BASE: oldname##_main(); break;
+#include "generated/newtoys.h"
+  }
+}
 
 // global context for this command.
 
 struct toy_context toys;
 union global_union this;
-char *toybox_version = TOYBOX_VERSION, toybuf[4096], libbuf[4096];
+char *toybox_version = TOYBOX_VERSION, *toybuf_p, *libbuf_p;
 
-struct toy_list *toy_find(char *name)
+// Keep malloc out of fast RAM, too: the programs that need it are not these.
+extern int __malloc_map_flags;
+
+char *toybuf_get(char **slot)
+{
+  char *p = mmap(0, TOYBUF_SIZE, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_SLOW, -1, 0);
+
+  if (p == MAP_FAILED) {
+    write(2, "toybuf: out of memory\n", 22);
+    _exit(1);
+  }
+  memset(p, 0, TOYBUF_SIZE);
+  return *slot = p;
+}
+
+struct toy_entry *toy_find(char *name)
 {
   int top, bottom, middle;
 
@@ -34,7 +64,7 @@ struct toy_list *toy_find(char *name)
   bottom = 1;
 
   // Binary search to find this command.
-  top = ARRAY_LEN(toy_list)-1;
+  top = ARRAY_LEN(toy_list_ro)-1;
   for (;;) {
     int result;
 
@@ -195,11 +225,11 @@ void check_help(char **arg)
 }
 
 // Setup toybox global state for this command.
-void toy_singleinit(struct toy_list *which, char *argv[])
+void toy_singleinit(struct toy_entry *which, char *argv[])
 {
   toys.which = which;
   toys.argv = argv;
-  toys.toycount = ARRAY_LEN(toy_list);
+  toys.toycount = ARRAY_LEN(toy_list_ro);
 
   if (NEED_OPTIONS && which->options) get_optflags();
   else {
@@ -230,7 +260,7 @@ void toy_singleinit(struct toy_list *which, char *argv[])
 }
 
 // Full init needed by multiplexer or reentrant calls, calls singleinit at end
-void toy_init(struct toy_list *which, char *argv[])
+void toy_init(struct toy_entry *which, char *argv[])
 {
   void *oldwhich = toys.which;
 
@@ -265,7 +295,7 @@ void toy_init(struct toy_list *which, char *argv[])
 
 // Run an internal toybox command.
 // Only returns if it can't run command internally, otherwise xexit() when done.
-void toy_exec_which(struct toy_list *which, char *argv[])
+void toy_exec_which(struct toy_entry *which, char *argv[])
 {
   // Return if we can't find it (which includes no multiplexer case),
   if (!which || (which->flags&TOYFLAG_NOFORK)) return;
@@ -288,7 +318,7 @@ void toy_exec_which(struct toy_list *which, char *argv[])
 
   // Run command
   toy_init(which, argv);
-  if (toys.which) toys.which->toy_main();
+  if (toys.which) toy_run(toys.which);
   xexit();
 }
 
@@ -311,11 +341,11 @@ void toybox_main(void)
   // Try dereferencing symlinks until we hit a recognized name
   while (s) {
     char *ss = basename(s);
-    struct toy_list *tl = toy_find(ss);
+    struct toy_entry *tl = toy_find(ss);
 
     if (tl==toy_list && s!=toys.argv[1]) unknown(ss);
     toy_exec_which(tl, toys.argv+1);
-    s = (0<readlink(s, libbuf, sizeof(libbuf))) ? libbuf : 0;
+    s = (0<readlink(s, libbuf, TOYBUF_SIZE)) ? libbuf : 0;
   }
 
   // For early error reporting
@@ -325,7 +355,7 @@ void toybox_main(void)
 
   // Output list of commands.
   terminal_size(&width, 0);
-  for (i = 1; i<ARRAY_LEN(toy_list); i++) {
+  for (i = 1; i<ARRAY_LEN(toy_list_ro); i++) {
     int fl = toy_list[i].flags;
     if (fl & TOYMASK_LOCATION) {
       if (toys.argv[1]) {
@@ -343,6 +373,7 @@ void toybox_main(void)
 
 int main(int argc, char *argv[])
 {
+  __malloc_map_flags = MAP_SLOW;
   // don't segfault if our environment is crazy
   // TODO mooted by kernel commit dcd46d897adb7 5.17 kernel Jan 2022
   if (!*argv) return 127;
@@ -363,7 +394,7 @@ int main(int argc, char *argv[])
   } else {
     // single command built standalone with no multiplexer is first list entry
     toy_singleinit(toy_list, argv);
-    toy_list->toy_main();
+    toy_run(toy_list);
   }
 
   xexit();

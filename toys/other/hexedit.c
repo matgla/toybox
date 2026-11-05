@@ -38,7 +38,7 @@ GLOBALS(
   unsigned rows, cols;
 )
 
-#define UNDO_LEN (sizeof(toybuf)/(sizeof(long long)+1))
+#define UNDO_LEN (TOYBUF_SIZE/(sizeof(long long)+1))
 
 static void show_error(char *what)
 {

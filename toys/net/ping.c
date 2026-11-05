@@ -8,9 +8,9 @@
  *   echo 0 999999999 > /proc/sys/net/ipv4/ping_group_range
  * (Android does this by default in its init script.)
  *
- * Yes, I wimped out and capped -s at sizeof(toybuf), waiting for a complaint...
+ * Yes, I wimped out and capped -s at TOYBUF_SIZE, waiting for a complaint...
 
-// -s > 4064 = sizeof(toybuf)-sizeof(struct icmphdr)-CMSG_SPACE(sizeof(uint8_t)), then kernel adds 20 bytes
+// -s > 4064 = TOYBUF_SIZE-sizeof(struct icmphdr)-CMSG_SPACE(sizeof(uint8_t)), then kernel adds 20 bytes
 USE_PING(NEWTOY(ping, "<1>1m#t#<0>255=64c#<0=3s#<0>4064=56i%W#<0=3w#<0qf46I:[-46]", TOYFLAG_USR|TOYFLAG_BIN|TOYFLAG_LINEBUF))
 USE_PING(OLDTOY(ping6, ping, TOYFLAG_USR|TOYFLAG_BIN|TOYFLAG_LINEBUF))
 
@@ -217,7 +217,7 @@ void ping_main(void)
   // left enought space to store ttl value
   len = CMSG_SPACE(sizeof(uint8_t));
   iov.iov_base = (void *)toybuf;
-  iov.iov_len = sizeof(toybuf) - len;
+  iov.iov_len = TOYBUF_SIZE - len;
   msg.msg_iov = &iov;
   msg.msg_iovlen = 1;
   msg.msg_control = &toybuf[iov.iov_len];

@@ -125,7 +125,7 @@ static int parse_crontab(char *fname)
 
     if (line[len - 1] == '\n') line[--len] = '\0';
     else {
-      snprintf(toybuf, sizeof(toybuf), "'%d': premature EOF\n", lno);
+      snprintf(toybuf, TOYBUF_SIZE, "'%d': premature EOF\n", lno);
       goto OUT;
     }
 
@@ -145,7 +145,7 @@ static int parse_crontab(char *fname)
         name = tokens[0];
         if ((val = strchr(name, '='))) *val++ = 0;
         if (!val || !*val) {
-          snprintf(toybuf, sizeof(toybuf), "'%d': %s\n", lno, line);
+          snprintf(toybuf, TOYBUF_SIZE, "'%d': %s\n", lno, line);
           goto OUT;
         }
         break;
@@ -156,13 +156,13 @@ static int parse_crontab(char *fname)
           val = tokens[1];
         } else {
           if (*(tokens[1]) != '=') {
-            snprintf(toybuf, sizeof(toybuf), "'%d': %s\n", lno, line);
+            snprintf(toybuf, TOYBUF_SIZE, "'%d': %s\n", lno, line);
             goto OUT;
           }
           val = tokens[1] + 1;
         }
         if (!*val) {
-          snprintf(toybuf, sizeof(toybuf), "'%d': %s\n", lno, line);
+          snprintf(toybuf, TOYBUF_SIZE, "'%d': %s\n", lno, line);
           goto OUT;
         }
         break;
@@ -170,33 +170,33 @@ static int parse_crontab(char *fname)
         name = tokens[0];
         val = tokens[2];
         if (*(tokens[1]) != '=') {
-          snprintf(toybuf, sizeof(toybuf), "'%d': %s\n", lno, line);
+          snprintf(toybuf, TOYBUF_SIZE, "'%d': %s\n", lno, line);
           goto OUT;
         }
         break;
       default:
         if (validate_component(0, 60, tokens[0])) {
-          snprintf(toybuf, sizeof(toybuf), "'%d': bad minute\n", lno);
+          snprintf(toybuf, TOYBUF_SIZE, "'%d': bad minute\n", lno);
           goto OUT;
         }
         if (validate_component(0, 24, tokens[1])) {
-          snprintf(toybuf, sizeof(toybuf), "'%d': bad hour\n", lno);
+          snprintf(toybuf, TOYBUF_SIZE, "'%d': bad hour\n", lno);
           goto OUT;
         }
         if (validate_component(1, 31, tokens[2])) {
-          snprintf(toybuf, sizeof(toybuf), "'%d': bad day-of-month\n", lno);
+          snprintf(toybuf, TOYBUF_SIZE, "'%d': bad day-of-month\n", lno);
           goto OUT;
         }
         if (validate_component(1, 12, tokens[3])) {
-          snprintf(toybuf, sizeof(toybuf), "'%d': bad month\n", lno);
+          snprintf(toybuf, TOYBUF_SIZE, "'%d': bad month\n", lno);
           goto OUT;
         }
         if (validate_component(0, 7, tokens[4])) {
-          snprintf(toybuf, sizeof(toybuf), "'%d': bad day-of-week\n", lno);
+          snprintf(toybuf, TOYBUF_SIZE, "'%d': bad day-of-week\n", lno);
           goto OUT;
         }
         if (!*ptr) { // don't have any cmd to execute.
-          snprintf(toybuf, sizeof(toybuf), "'%d': bad command\n", lno);
+          snprintf(toybuf, TOYBUF_SIZE, "'%d': bad command\n", lno);
           goto OUT;
         }
         break;
@@ -216,7 +216,7 @@ static void do_list(char *name)
 {
   int fdin;
 
-  snprintf(toybuf, sizeof(toybuf), "%s%s", TT.cdir, name);
+  snprintf(toybuf, TOYBUF_SIZE, "%s%s", TT.cdir, name);
   fdin = xopenro(toybuf);
   xsendfile(fdin, 1);
   xclose(fdin);
@@ -224,7 +224,7 @@ static void do_list(char *name)
 
 static void do_remove(char *name)
 {
-  snprintf(toybuf, sizeof(toybuf), "%s%s", TT.cdir, name);
+  snprintf(toybuf, TOYBUF_SIZE, "%s%s", TT.cdir, name);
   if (unlink(toybuf))
     error_exit("No crontab for '%s'", name);
 }
@@ -234,7 +234,7 @@ static void update_crontab(char *src, char *dest)
   int fdin, fdout;
   struct passwd *pwd = xgetpwnam(dest);
 
-  snprintf(toybuf, sizeof(toybuf), "%s%s", TT.cdir, dest);
+  snprintf(toybuf, TOYBUF_SIZE, "%s%s", TT.cdir, dest);
   unlink(toybuf);
   fdout = xcreate(toybuf, O_WRONLY|O_CREAT|O_TRUNC, 0600);
   fdin = xopenro(src);
@@ -277,7 +277,7 @@ static void do_edit(struct passwd *pwd)
     perror_exit("Can't open tmp file");
 
   fchmod(destfd, 0666);
-  snprintf(toybuf, sizeof(toybuf), "%s%s", TT.cdir, pwd->pw_name);
+  snprintf(toybuf, TOYBUF_SIZE, "%s%s", TT.cdir, pwd->pw_name);
 
   if (!stat(toybuf, &sb)) { // file exists and have some content.
     if (sb.st_size) {

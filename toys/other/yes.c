@@ -34,7 +34,7 @@ void yes_main(void)
   }
 
   // Populate a redundant iovec[] outputting the same string many times
-  for (i = ll = 0; i<sizeof(toybuf)/sizeof(*iov); i++) {
+  for (i = ll = 0; i<TOYBUF_SIZE/sizeof(*iov); i++) {
     iov[i].iov_base = out;
     ll += (iov[i].iov_len = ss-out);
   }

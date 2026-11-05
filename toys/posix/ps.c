@@ -319,7 +319,7 @@ struct procpid {
 
 // TODO: Android uses -30 for LABEL, but ideally it would auto-size.
 struct typography {
-  char *name, *help;
+  char *ROREL name, *ROREL help;
   signed char width, slot;
 } static const typos[] = TAGGED_ARRAY(PS,
   // Numbers. (What's in slot[] is what's displayed, sorted numerically.)
@@ -508,7 +508,7 @@ static int ps_match_process(long long *slot)
 // Generate display string (260 bytes at end of toybuf) from struct ofield
 static char *string_field(struct procpid *tb, struct ofields *field)
 {
-  char *buf = toybuf+sizeof(toybuf)-260, *out = buf, *s;
+  char *buf = toybuf+TOYBUF_SIZE-260, *out = buf, *s;
   int which = field->which, sl = typos[which].slot;
   long long *slot = tb->slot, ll = (sl >= 0) ? slot[sl&(XX-1)] : 0;
 
@@ -774,7 +774,7 @@ static int get_ps(struct dirtree *new)
       if (!TT.tty) tb->str[i] = '?';
   buf = tb->str+i;
   *buf++ = 0;
-  len = sizeof(toybuf)-(buf-toybuf);
+  len = TOYBUF_SIZE-(buf-toybuf);
 
   // Overwrite useless/obsolete stat fields with more interesting data.
 
@@ -901,7 +901,7 @@ static int get_ps(struct dirtree *new)
     // end of toybuf for output conversion in string_field(). Other than that,
     // each use all available space, and future strings that don't use their
     // guaranteed minimum add to the pool.
-    len = sizeof(toybuf)-256*(ARRAY_LEN(fetch)-j)-(buf-toybuf)-260;
+    len = TOYBUF_SIZE-256*(ARRAY_LEN(fetch)-j)-(buf-toybuf)-260;
     sprintf(buf, "%lld/%s", slot[SLOT_tid], fetch[j].name);
 
     // For exe (j==3) readlink() instead of reading file's contents
@@ -1394,7 +1394,7 @@ void ps_main(void)
 
   // Calculate seen fields bit array, and if we aren't deferring printing
   // print headers now (for low memory/nommu systems).
-  TT.bits = get_headers(TT.fields, toybuf, sizeof(toybuf));
+  TT.bits = get_headers(TT.fields, toybuf, TOYBUF_SIZE);
   if (!FLAG(M) && toybuf[strspn(toybuf, " ")])
     printf("%.*s\n", TT.width, toybuf);
   if (!(FLAG(k)||FLAG(M))) TT.show_process = show_ps;
@@ -1418,7 +1418,7 @@ void ps_main(void)
       }
 
       // Now that we've recalculated field widths, re-pad headers again
-      get_headers(TT.fields, toybuf, sizeof(toybuf));
+      get_headers(TT.fields, toybuf, TOYBUF_SIZE);
       printf("%.*s\n", TT.width, toybuf);
     }
 
@@ -1550,7 +1550,7 @@ static void top_common(
   }
 
   toys.signal = SIGWINCH;
-  TT.bits = get_headers(TT.fields, toybuf, sizeof(toybuf));
+  TT.bits = get_headers(TT.fields, toybuf, TOYBUF_SIZE);
   *scratch = 0;
   memset(plist, 0, sizeof(plist));
   memset(stats, 0, sizeof(stats));
@@ -1567,7 +1567,7 @@ static void top_common(
     plnew->tb = collate(plnew->count = TT.kcount, dt);
     TT.kcount = 0;
 
-    if (readfile("/proc/stat", pos = toybuf, sizeof(toybuf))) {
+    if (readfile("/proc/stat", pos = toybuf, TOYBUF_SIZE)) {
       long long *st = stats+8*(tock&1);
 
       // user nice system idle iowait irq softirq host
@@ -1653,7 +1653,7 @@ static void top_common(
             run[0], run[2]+run[3], run[4]);
           lines = header_line(lines, 0);
 
-          if (readfile("/proc/meminfo", toybuf+256, sizeof(toybuf)-256)) {
+          if (readfile("/proc/meminfo", toybuf+256, TOYBUF_SIZE-256)) {
             for (i = 0; i<6; i++) {
               j = i%3;
               pos = strafter(toybuf+256, (char *[]){"MemTotal:","\nMemFree:",
@@ -1714,7 +1714,7 @@ static void top_common(
             bits |= ll;
             for (i=0; i<mix.count; i++)
               tb.slot[slot] += mix.tb[i]->slot[slot];
-            pos += snprintf(pos, sizeof(toybuf)/2-(pos-toybuf),
+            pos += snprintf(pos, TOYBUF_SIZE/2-(pos-toybuf),
               " %s: %*s,", typos[field->which].name,
               field->len, string_field(&tb, field));
           }
@@ -1723,7 +1723,7 @@ static void top_common(
 
         lines = header_line(lines, 0);
         // print line of header labels for currently displayed fields
-        get_headers(TT.fields, pos = toybuf, sizeof(toybuf));
+        get_headers(TT.fields, pos = toybuf, TOYBUF_SIZE);
         for (i = TT.scroll; *pos; i++) {
           while (isspace(*pos)) pos++;
           if (pos!=toybuf && i==TT.sortpos) pos[-1] = '[';
