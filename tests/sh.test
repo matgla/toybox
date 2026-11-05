@@ -845,3 +845,17 @@ testing 'unalias' \
 # AB[+(DEF]) AB[DEF]
 
 # Testing shell corner cases _within_ a shell script is kind of hard.
+
+# ${x%%pat} takes the longest suffix: every position has to match to the end
+testing '${x%%=*}' 'x=--a=b=c; echo ${x%%=*} ${x%=*}' '--a --a=b\n' '' ''
+testing '${x%%.*} no match' 'x=abc; echo ${x%%.*} ${x%%*}[${x%%z*}]' 'abc [abc]\n' '' ''
+
+# The keyword closing a block ends its segment when the outer block's end follows
+testing 'fi }' 'f() { if true; then echo a; fi }; f' 'a\n' '' ''
+testing 'fi fi' 'if true; then if true; then echo a; fi fi' 'a\n' '' ''
+testing 'fi done' 'for i in 1; do if true; then echo a; fi done' 'a\n' '' ''
+testing 'fi esac' 'case a in a) if true; then echo a; fi esac' 'a\n' '' ''
+testing '} then' 'if { true; } then echo a; fi' 'a\n' '' ''
+testing '} do' 'while { false; } do echo a; done; echo b' 'b\n' '' ''
+testing 'esac }' '{ case a in a) echo a;; esac }' 'a\n' '' ''
+testing 'closing word as argument' 'echo fi } done' 'fi } done\n' '' ''

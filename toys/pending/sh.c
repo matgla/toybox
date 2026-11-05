@@ -2490,7 +2490,7 @@ barf:
           // ${x%y} ${x%%y} suffix
           } else if (*slice=='%') {
             for (ss = ifs+strlen(ifs), yy = -1; ss>=ifs; ss--) {
-              if (0<(dd = wildcard_match(ss, s, &wild, WILD_SHORT*xx))&&!ss[dd])
+              if (0<(dd = wildcard_match(ss, s, &wild, 0))&&!ss[dd])
               {
                 yy = ss-ifs;
                 if (!xx) break;
@@ -3722,6 +3722,16 @@ if (DEBUG) dprintf(2, "%d %p(%d) %s word=%.*s\n", getpid(), pl, pl ? pl->type : 
       // end (possibly multiline) function segment, expect function body next
       dlist_add(expect, 0);
       pl = 0;
+
+      continue;
+    }
+
+    // A keyword that closed a block ends its segment if the enclosing block's
+    // end comes next: "fi }" is "fi; }"
+    if (pl && pl->type==3 && arg->c==1 && ex && end>start
+        && !strncmp(start, ex, end-start) && !ex[end-start])
+    {
+      pl->count = -1;
 
       continue;
     }
