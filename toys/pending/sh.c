@@ -3197,7 +3197,11 @@ __attribute__((noinline)) static void sh_exec_vfork(char **argv)
 {
   char *pp = getvar("PATH") ? : _PATH_DEFPATH, *ss = TT.isexec ? : *argv;
 
-  if (getpid() != TT.pid) signify(SIGINT, 0); // TODO: restore all?
+  // The program gets ^C's SIGINT with its default action, whatever this
+  // (interactive) shell ignores: an ignored signal would stay ignored across
+  // exec.  signal() rather than signify(): a vfork child shares the parent's
+  // memory, and signify() edits the trap table in it.
+  if (getpid() != TT.pid) signal(SIGINT, SIG_DFL);
 
   // Allocated by the parent in sh_main(), which is suspended meanwhile and stays
   // out of it: this runs on its stack, which a load then goes much deeper on.
@@ -3275,7 +3279,11 @@ __attribute__((noinline)) static void sh_exec_other(char **argv)
   struct string_list *sl = 0;
   struct toy_entry *tl = 0;
 
-  if (getpid() != TT.pid) signify(SIGINT, 0); // TODO: restore all?
+  // The program gets ^C's SIGINT with its default action, whatever this
+  // (interactive) shell ignores: an ignored signal would stay ignored across
+  // exec.  signal() rather than signify(): a vfork child shares the parent's
+  // memory, and signify() edits the trap table in it.
+  if (getpid() != TT.pid) signal(SIGINT, SIG_DFL);
 
   errno = ENOENT;
   if (strchr(ss, '/')) {
@@ -4666,7 +4674,7 @@ static char *get_next_line(FILE *fp, int prompt)
     // lines too: read_line_tty() reads ahead into its own buffer, so a burst
     // that opens a block on one line and continues it on the next must be
     // read back through it, and its ctrl-C is the only way out of a PS2
-    // prompt (the console has no ISIG to turn ^C into SIGINT).
+    // prompt (raw mode clears ISIG, so ^C arrives here as a byte).
     if (fp==stdin && prompt<3 && isatty(0)) return read_line_tty(toybuf, plen);
   }
 
