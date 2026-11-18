@@ -15,6 +15,8 @@
 const struct toy_entry toy_list_ro[] = {
 #include "generated/newtoys.h"
 };
+// For sh's tab completion, which lists them from another file.
+const unsigned toy_list_len = ARRAY_LEN(toy_list_ro);
 
 // A switch rather than a pointer in each entry: on YasOS a function pointer is
 // a per-process RAM thunk behind a per-process GOT slot, so a table of them

@@ -105,6 +105,7 @@ struct toy_entry {
 };
 extern const struct toy_entry toy_list_ro[];
 #define toy_list ((struct toy_entry *)toy_list_ro)
+extern const unsigned toy_list_len;
 void toy_run(struct toy_entry *which);
 
 // Global context shared by all commands.

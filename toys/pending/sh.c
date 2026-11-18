@@ -4524,15 +4524,219 @@ static void tty_take_pending(char **buf, int *cap, int *len, char *scratch)
   }
 }
 
+// --- tab completion --------------------------------------------------------
+
+// What a completion may be: a directory, an executable file, any file.
+#define TAB_DIRS 1
+#define TAB_EXEC 2
+#define TAB_FILES 4
+
+// Add the names in dir starting with pre[0..plen) that the mode allows to
+// *out, a directory as "name/". Dot names only when pre starts with a dot, and
+// never "." or ".." unless pre spells it. Every match is stat()ed: YasOS
+// getdents does not fill in d_type.
+static void tab_dir(struct sh_arg *out, char *dir, char *pre, int plen,
+  int mode)
+{
+  DIR *dp = opendir(*dir ? dir : "/");
+  struct dirent *de;
+  struct stat st;
+  char *s, *path;
+  int isdir;
+
+  if (!dp) return;
+  while ((de = readdir(dp))) {
+    s = de->d_name;
+    if (strncmp(s, pre, plen) || (*s=='.' && *pre!='.')) continue;
+    if ((!strcmp(s, ".") || !strcmp(s, "..")) && strcmp(s, pre)) continue;
+    path = xmprintf("%s/%s", dir, s);
+    isdir = !stat(path, &st) && S_ISDIR(st.st_mode);
+    if (isdir ? mode&TAB_DIRS
+        : (mode&TAB_FILES) || ((mode&TAB_EXEC) && !access(path, X_OK)))
+      arg_add(out, isdir ? xmprintf("%s/", s) : xstrdup(s));
+    free(path);
+  }
+  closedir(dp);
+}
+
+// Insert s[0..n) at the cursor.
+static void tty_insert(char **buf, int *cap, int *len, int *pos, char *s, int n)
+{
+  if (*len+n+2>*cap) *buf = xrealloc(*buf, *cap = *len+n+64);
+  memmove(*buf+*pos+n, *buf+*pos, *len-*pos+1);
+  memcpy(*buf+*pos, s, n);
+  *len += n;
+  *pos += n;
+}
+
+// Insert s[0..n) at the cursor quoted for where the word stands: inside an
+// open quote q, or with backslashes outside one.
+static void tab_insert(char **buf, int *cap, int *len, int *pos, char *s, int n,
+  char q)
+{
+  char c;
+
+  while (n--) {
+    c = *s++;
+    if (q=='\'' ? c=='\'' : q ? !!strchr("\"\\$`", c)
+        : !!strchr(" \t\n\\'\"`$&;|<>()*?[]#!", c)) {
+      if (q=='\'') tty_insert(buf, cap, len, pos, "'\\'", 3);
+      else tty_insert(buf, cap, len, pos, "\\", 1);
+    }
+    tty_insert(buf, cap, len, pos, &c, 1);
+  }
+}
+
+// Whether the word s[0..n) leaves the next word in command position: a
+// keyword that starts a command, or a variable assignment.
+static int tab_keeps_cmd(char *s, int n)
+{
+  char *kw[] = {"if", "then", "else", "elif", "do", "while", "until", "!",
+    "{", "time", "exec", "command", "builtin"};
+  int i;
+
+  for (i = 0; i<ARRAY_LEN(kw); i++)
+    if (n==strlen(kw[i]) && !strncmp(s, kw[i], n)) return 1;
+  if (!isalpha(*s) && *s!='_') return 0;
+  for (i = 1; i<n && (isalnum(s[i]) || s[i]=='_'); i++);
+
+  return i<n && s[i]=='=';
+}
+
+// Complete the word before the cursor: a command name (toybox applets and
+// $PATH) where a command starts, a directory after cd, a file name elsewhere.
+// One match goes in whole and ends the word; several put in what they share,
+// and with nothing to add the second TAB in a row lists them. Returns whether
+// it printed (the caller redraws the line after it).
+static int tab_complete(char **buf, int *cap, int *len, int *pos, int again)
+{
+  struct sh_arg out = {0};
+  char *b = *buf, q = 0, c, *word, *pre, *dir, *s, *ss, *path;
+  int i, j, ws = -1, cmd = 1, cmdws = -1, redir = 0, mode, plen, common, wide,
+    cols, rows, printed = 0;
+
+  // Walk the line up to the cursor for the start of the word being typed and
+  // whether it stands where a command name goes. Quotes and backslashes keep
+  // their characters inside the word.
+  for (i = 0; i<*pos; i++) {
+    c = b[i];
+    if (q) {
+      if (c==q) q = 0;
+      else if (c=='\\' && q=='"') i++;
+    } else if (strchr(" \t;|&()<>", c)) {
+      // ">&2" and "<&0" are one redirection, not a background operator
+      if (c=='&' && i && (b[i-1]=='>' || b[i-1]=='<')) continue;
+      if (ws>=0) {
+        if (redir) redir = 0;
+        else if (cmd && !tab_keeps_cmd(b+ws, i-ws)) cmd = 0, cmdws = ws;
+        ws = -1;
+      }
+      if (c=='<' || c=='>') redir = 1;
+      else if (c!=' ' && c!='\t') cmd = 1, cmdws = -1, redir = 0;
+    } else {
+      if (ws<0) ws = i;
+      if (c=='\\') i++;
+      else if (c=='\'' || c=='"') q = c;
+    }
+  }
+  if (ws<0) ws = *pos;
+  if (i>*pos) return 0;   // the cursor sits after a lone backslash
+
+  // The word as the shell will see it: quotes and backslashes removed.
+  word = xmalloc(*pos-ws+1);
+  for (i = ws, j = 0, q = 0; i<*pos; i++) {
+    c = b[i];
+    if (q) {
+      if (c==q) { q = 0; continue; }
+      if (c=='\\' && q=='"' && i+1<*pos && strchr("\"\\$`", b[i+1])) c = b[++i];
+    } else if (c=='\'' || c=='"') { q = c; continue; }
+    else if (c=='\\') {
+      if (++i==*pos) break;
+      c = b[i];
+    }
+    word[j++] = c;
+  }
+  word[j] = 0;
+
+  // Where to look, and what for. "~/" reads $HOME's directories.
+  if (cmd && !redir) mode = strchr(word, '/') ? TAB_DIRS|TAB_EXEC : 0;
+  else if (cmdws>=0 && !redir && !strncmp(b+cmdws, "cd", 2)
+      && strchr(" \t", b[cmdws+2])) mode = TAB_DIRS;
+  else mode = TAB_DIRS|TAB_FILES;
+  if ((pre = strrchr(word, '/'))) {
+    *pre++ = 0;
+    if (*word=='~' && (!word[1] || word[1]=='/') && (s = getvar("HOME")))
+      dir = xmprintf("%s%s", s, word+1);
+    else dir = xstrdup(word);
+  } else dir = xstrdup("."), pre = word;
+  plen = strlen(pre);
+
+  if (mode) tab_dir(&out, dir, pre, plen, mode);
+  else {
+    for (i = 0; i<toy_list_len; i++)
+      if (!strncmp(toy_list[i].name, pre, plen))
+        arg_add(&out, xstrdup(toy_list[i].name));
+    for (s = getvar("PATH") ? : ""; s; s = ss ? ss+1 : 0) {
+      ss = strchr(s, ':');
+      path = ss ? xstrndup(s, ss-s) : xstrdup(s);
+      tab_dir(&out, *path ? path : ".", pre, plen, TAB_EXEC);
+      free(path);
+    }
+  }
+
+  // Sorted and without repeats: an applet is in toy_list and in $PATH both.
+  if (out.c) qsort(out.v, out.c, sizeof(char *), qstrcmp);
+  for (i = j = 0; i<out.c; i++)
+    if (j && !strcmp(out.v[i], out.v[j-1])) free(out.v[i]);
+    else out.v[j++] = out.v[i];
+  out.c = j;
+
+  for (common = out.c ? strlen(*out.v) : 0, i = 1; i<out.c; i++)
+    for (j = 0; j<common; j++) if (out.v[i][j]!=out.v[0][j]) common = j;
+
+  if (!out.c) dprintf(2, "\a");
+  else if (common>plen || out.c==1) {
+    tab_insert(buf, cap, len, pos, out.v[0]+plen, common-plen, q);
+    // a whole name ends its word, a directory stays open for the next level
+    if (out.c==1 && out.v[0][common-1]!='/') {
+      if (q) tty_insert(buf, cap, len, pos, &q, 1);
+      tty_insert(buf, cap, len, pos, " ", 1);
+    }
+  } else if (!again) dprintf(2, "\a");
+  else {
+    // the list in columns, filled downwards like ls
+    for (wide = i = 0; i<out.c; i++) if ((j = strlen(out.v[i]))>wide) wide = j;
+    wide += 2;
+    cols = ((s = getvar("COLUMNS")) ? atoi(s) : 80)/wide;
+    if (cols<1) cols = 1;
+    rows = (out.c+cols-1)/cols;
+    dprintf(2, "\r\n");
+    for (i = 0; i<rows; i++) {
+      for (j = i; j<out.c; j += rows)
+        dprintf(2, "%-*s", j+rows<out.c ? wide : 0, out.v[j]);
+      dprintf(2, "\r\n");
+    }
+    printed = 1;
+  }
+
+  while (out.c) free(out.v[--out.c]);
+  free(out.v);
+  free(word);
+  free(dir);
+
+  return printed;
+}
+
 // Set when ctrl-C abandoned the line being edited, so sh_loop() can drop a
 // half-parsed command (an open if/for/quote waiting at PS2) along with it.
 static int line_cancelled;
 
 // Read one logical line from an interactive terminal (fd 0) with line editing
 // and up/down history recall. prompt[0..plen) is the already-rendered prompt.
+// TAB completes when complete is set, else it is a literal tab.
 // Returns a malloc'd line including a trailing '\n' (matching the getc() path),
 // or NULL on end of input.
-static char *read_line_tty(char *prompt, int plen)
+static char *read_line_tty(char *prompt, int plen, int complete)
 {
   struct termios old;
   // Static, and not cleared per line: tty_take_pending() reads ahead, so when a
@@ -4541,7 +4745,7 @@ static char *read_line_tty(char *prompt, int plen)
   // silently drop the following command.
   static char scratch[16];
   char *buf, *saved = 0, *line;
-  int len = 0, pos = 0, cap = 64, key, hpos = TT.history.c, n, pw;
+  int len = 0, pos = 0, cap = 64, key = 0, hpos = TT.history.c, n, pw, again;
 
   if (set_terminal(0, 1, 0, &old)) return 0;
   prompt = xstrndup(prompt, plen);  // toybuf is volatile, keep our own copy
@@ -4554,6 +4758,7 @@ static char *read_line_tty(char *prompt, int plen)
   // (tty_show: CR + reprint + \e[K + cursor move) is only needed to repaint the
   // line in place during editing, below.
   for (;;) {
+    again = key==9;
     key = scan_key(scratch, -1);
 
     if (key=='\r' || key=='\n') { dprintf(2, "\r\n"); break; }
@@ -4606,8 +4811,10 @@ edit:
       memmove(buf+pos, buf+n, len-n);
       buf[len -= n-pos] = 0;
     } else if (key==12) dprintf(2, "\e[H\e[2J");      // ctrl-L: clear screen
-    // TAB too: there is no completion, and a here-document typed at PS2 (a
-    // Makefile) needs its tabs.
+    else if (key==9 && complete)                      // TAB: complete
+      tab_complete(&buf, &cap, &len, &pos, again);
+    // TAB at PS2 is itself: a here-document typed there (a Makefile) needs
+    // its tabs.
     else if ((key>=32 && key<256) || key==9) {        // insert a literal byte
       if (len+2>cap) buf = xrealloc(buf, cap += 64);
       memmove(buf+pos+1, buf+pos, len-pos);
@@ -4675,7 +4882,8 @@ static char *get_next_line(FILE *fp, int prompt)
     // that opens a block on one line and continues it on the next must be
     // read back through it, and its ctrl-C is the only way out of a PS2
     // prompt (raw mode clears ISIG, so ^C arrives here as a byte).
-    if (fp==stdin && prompt<3 && isatty(0)) return read_line_tty(toybuf, plen);
+    if (fp==stdin && prompt<3 && isatty(0))
+      return read_line_tty(toybuf, plen, prompt==1);
   }
 
 // TODO what should ctrl-C do? (also in "select")
