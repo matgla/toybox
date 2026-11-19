@@ -41,6 +41,12 @@ void reboot_main(void)
   if (!FLAG(n)) sync();
 
   idx = stridx("hp", *toys.which->name)+1;
+  // YasOS has no init to signal: pid 1 is a shell, and SIGTERM would only end
+  // it. reboot(2) itself syncs and, with no init, nothing else needs telling.
+#ifdef __YasOS__
+  if (reboot(types[idx])) perror_exit("reboot");
+#else
   if (FLAG(f)) toys.exitval = reboot(types[idx]);
   else toys.exitval = kill(1, sigs[idx]);
+#endif
 }
